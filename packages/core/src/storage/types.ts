@@ -1,6 +1,7 @@
 import type { MetricResult, TestInfo } from '../eval';
 import type { MemoryConfig } from '../memory/types';
 import type { WorkflowRunState } from '../workflows';
+import type { LegacyWorkflowRunState } from '../workflows/legacy';
 
 export interface StorageColumn {
   type: 'text' | 'timestamp' | 'uuid' | 'jsonb' | 'integer' | 'bigint';
@@ -12,12 +13,32 @@ export interface StorageColumn {
   };
 }
 
-export interface WorkflowRow {
-  workflow_name: string;
-  run_id: string;
-  snapshot: WorkflowRunState;
-  created_at: Date;
-  updated_at: Date;
+export interface LegacyWorkflowRuns {
+  runs: LegacyWorkflowRun[];
+  total: number;
+}
+
+export interface LegacyWorkflowRun {
+  workflowName: string;
+  runId: string;
+  snapshot: LegacyWorkflowRunState | string;
+  createdAt: Date;
+  updatedAt: Date;
+  resourceId?: string;
+}
+
+export interface WorkflowRuns {
+  runs: WorkflowRun[];
+  total: number;
+}
+
+export interface WorkflowRun {
+  workflowName: string;
+  runId: string;
+  snapshot: WorkflowRunState | string;
+  createdAt: Date;
+  updatedAt: Date;
+  resourceId?: string;
 }
 
 export type StorageGetMessagesArg = {
@@ -33,6 +54,7 @@ export type StorageGetMessagesArg = {
     }[];
   };
   threadConfig?: MemoryConfig;
+  format?: 'v1' | 'v2';
 };
 
 export type EvalRow = {

@@ -1,16 +1,19 @@
 #! /usr/bin/env node
 import { Command } from 'commander';
 
-import { PosthogAnalytics, type CLI_ORIGIN } from './analytics/index';
+import { config } from 'dotenv';
+import { PosthogAnalytics } from './analytics/index';
+import type { CLI_ORIGIN } from './analytics/index';
 import { build } from './commands/build/build';
 import { create } from './commands/create/create';
 import { deploy } from './commands/deploy/index';
 import { dev } from './commands/dev/dev';
 import { init } from './commands/init/init';
 import { checkAndInstallCoreDeps, checkPkgJson, interactivePrompt } from './commands/init/utils';
+import { lint } from './commands/lint';
+import { start } from './commands/start';
 import { DepsService } from './services/service.deps';
 import { logger } from './utils/logger';
-import { config } from 'dotenv';
 
 const depsService = new DepsService();
 const version = await depsService.getPackageVersion();
@@ -41,30 +44,36 @@ program
   });
 
 program
-  .command('create')
+  .command('create [project-name]')
   .description('Create a new Mastra project')
-  .option('--default', 'Quick start with defaults(src, OpenAI, no examples)')
+  .option('--default', 'Quick start with defaults(src, OpenAI, examples)')
   .option('-c, --components <components>', 'Comma-separated list of components (agents, tools, workflows)')
   .option('-l, --llm <model-provider>', 'Default model provider (openai, anthropic, groq, google, or cerebras))')
   .option('-k, --llm-api-key <api-key>', 'API key for the model provider')
   .option('-e, --example', 'Include example code')
+  .option('-n, --no-example', 'Do not include example code')
   .option('-t, --timeout [timeout]', 'Configurable timeout for package installation, defaults to 60000 ms')
+  .option('-d, --dir <directory>', 'Target directory for Mastra source code (default: src/)')
   .option(
     '-p, --project-name <string>',
     'Project name that will be used in package.json and as the project directory name.',
   )
-  .action(async args => {
+  .option('-m, --mcp <editor>', 'MCP Server for code editor (cursor, cursor-global, windsurf, vscode)')
+  .action(async (projectNameArg, args) => {
+    // Unify: use argument if present, else option
+    const projectName = projectNameArg || args.projectName;
     await analytics.trackCommandExecution({
       command: 'create',
-      args,
+      args: { ...args, projectName },
       execution: async () => {
         const timeout = args?.timeout ? (args?.timeout === true ? 60000 : parseInt(args?.timeout, 10)) : undefined;
         if (args.default) {
           await create({
             components: ['agents', 'tools', 'workflows'],
             llmProvider: 'openai',
-            addExample: false,
+            addExample: true,
             timeout,
+            mcpServer: args.mcp,
           });
           return;
         }
@@ -74,7 +83,9 @@ program
           addExample: args.example,
           llmApiKey: args['llm-api-key'],
           timeout,
-          projectName: args.projectName,
+          projectName,
+          directory: args.dir,
+          mcpServer: args.mcp,
         });
       },
       origin,
@@ -84,19 +95,21 @@ program
 program
   .command('init')
   .description('Initialize Mastra in your project')
-  .option('--default', 'Quick start with defaults(src, OpenAI, no examples)')
+  .option('--default', 'Quick start with defaults(src, OpenAI, examples)')
   .option('-d, --dir <directory>', 'Directory for Mastra files to (defaults to src/)')
   .option('-c, --components <components>', 'Comma-separated list of components (agents, tools, workflows)')
-  .option('-l, --llm <model-provider>', 'Default model provider (openai, anthropic, or groq))')
+  .option('-l, --llm <model-provider>', 'Default model provider (openai, anthropic, groq, google or cerebras))')
   .option('-k, --llm-api-key <api-key>', 'API key for the model provider')
   .option('-e, --example', 'Include example code')
+  .option('-n, --no-example', 'Do not include example code')
+  .option('-m, --mcp <editor>', 'MCP Server for code editor (cursor, cursor-global, windsurf, vscode)')
   .action(async args => {
     await analytics.trackCommandExecution({
       command: 'init',
       args,
       execution: async () => {
         await checkPkgJson();
-        await checkAndInstallCoreDeps();
+        await checkAndInstallCoreDeps(args?.example || args?.default);
 
         if (!Object.keys(args).length) {
           const result = await interactivePrompt();
@@ -112,7 +125,8 @@ program
             directory: 'src/',
             components: ['agents', 'tools', 'workflows'],
             llmProvider: 'openai',
-            addExample: false,
+            addExample: true,
+            configureEditorWithDocsMCP: args.mcp,
           });
           return;
         }
@@ -124,8 +138,26 @@ program
           llmProvider: args.llm,
           addExample: args.example,
           llmApiKey: args['llm-api-key'],
+          configureEditorWithDocsMCP: args.mcp,
         });
         return;
+      },
+      origin,
+    });
+  });
+
+program
+  .command('lint')
+  .description('Lint your Mastra project')
+  .option('-d, --dir <path>', 'Path to your Mastra folder')
+  .option('-r, --root <path>', 'Path to your root folder')
+  .option('-t, --tools <toolsDirs>', 'Comma-separated list of paths to tool files to include')
+  .action(async args => {
+    await analytics.trackCommandExecution({
+      command: 'lint',
+      args,
+      execution: async () => {
+        await lint({ dir: args.dir, root: args.root, tools: args.tools ? args.tools.split(',') : [] });
       },
       origin,
     });
@@ -137,14 +169,19 @@ program
   .option('-d, --dir <dir>', 'Path to your mastra folder')
   .option('-r, --root <root>', 'Path to your root folder')
   .option('-t, --tools <toolsDirs>', 'Comma-separated list of paths to tool files to include')
-  .option('-p, --port <port>', 'Port number for the development server (defaults to 4111)')
+  .option('-p, --port <port>', 'deprecated: Port number for the development server (defaults to 4111)')
   .action(args => {
     analytics.trackCommand({
       command: 'dev',
       origin,
     });
+
+    if (args?.port) {
+      logger.warn('The --port option is deprecated. Use the server key in the Mastra instance instead.');
+    }
+
     dev({
-      port: args?.port ? parseInt(args.port) : 4111,
+      port: args?.port ? parseInt(args.port) : null,
       dir: args?.dir,
       root: args?.root,
       tools: args?.tools ? args.tools.split(',') : [],
@@ -156,13 +193,19 @@ program
 program
   .command('build')
   .description('Build your Mastra project')
-  .option('-d, --dir <path>', 'Path to directory')
+  .option('-d, --dir <path>', 'Path to your Mastra Folder')
+  .option('-r, --root <path>', 'Path to your root folder')
+  .option('-t, --tools <toolsDirs>', 'Comma-separated list of paths to tool files to include')
   .action(async args => {
     await analytics.trackCommandExecution({
       command: 'mastra build',
       args,
       execution: async () => {
-        await build({ dir: args.dir });
+        await build({
+          dir: args?.dir,
+          root: args?.root,
+          tools: args?.tools ? args.tools.split(',') : [],
+        });
       },
       origin,
     });
@@ -178,7 +221,30 @@ program
       command: 'mastra deploy',
       args,
       execution: async () => {
+        logger.warn(`DEPRECATED: The deploy command is deprecated.
+          Please use the mastra build command instead.
+          Then deploy .mastra/output to your target platform.
+          `);
         await deploy({ dir: args.dir });
+      },
+      origin,
+    });
+  });
+
+program
+  .command('start')
+  .description('Start your built Mastra application')
+  .option('-d, --dir <path>', 'Path to your built Mastra output directory (default: .mastra/output)')
+  .option('-nt, --no-telemetry', 'Disable telemetry on start')
+  .action(async args => {
+    await analytics.trackCommandExecution({
+      command: 'start',
+      args,
+      execution: async () => {
+        await start({
+          dir: args.dir,
+          telemetry: !args.noTelemetry,
+        });
       },
       origin,
     });

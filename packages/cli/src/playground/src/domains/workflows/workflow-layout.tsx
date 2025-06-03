@@ -1,25 +1,38 @@
 import { useParams } from 'react-router';
 
-import { WorkflowRunProvider } from '@mastra/playground-ui';
+import { WorkflowRunProvider, Header, HeaderTitle } from '@mastra/playground-ui';
 
-import { Header } from '@/components/ui/header';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { useWorkflow } from '@/hooks/use-workflows';
 
 import { WorkflowHeader } from './workflow-header';
+import { useWorkflowRuns } from '@/pages/workflows/workflow/hooks/use-workflow-runs';
 
 export const WorkflowLayout = ({ children }: { children: React.ReactNode }) => {
-  const { workflowId } = useParams();
+  const { workflowId, runId } = useParams();
   const { workflow, isLoading: isWorkflowLoading } = useWorkflow(workflowId!);
+  const { data: runs } = useWorkflowRuns({ workflowId: workflowId! });
+
+  if (isWorkflowLoading) {
+    return (
+      <div className="h-full overflow-hidden flex flex-col">
+        <Header>
+          <HeaderTitle>
+            <Skeleton className="h-6 w-[200px]" />
+          </HeaderTitle>
+        </Header>
+      </div>
+    );
+  }
+
+  const run = runs?.runs.find(run => run.runId === runId);
+
   return (
-    <WorkflowRunProvider>
-      <div className="flex flex-col h-full overflow-hidden">
-        {isWorkflowLoading ? (
-          <Header title={<Skeleton className="h-6 w-[200px]" />} />
-        ) : (
-          <WorkflowHeader workflowName={workflow?.name!} workflowId={workflowId!} />
-        )}
+    <WorkflowRunProvider snapshot={typeof run?.snapshot === 'object' ? run.snapshot : undefined}>
+      <div className="h-full overflow-hidden flex flex-col">
+        <WorkflowHeader workflowName={workflow?.name || ''} workflowId={workflowId!} runId={runId} />
+
         {children}
       </div>
     </WorkflowRunProvider>

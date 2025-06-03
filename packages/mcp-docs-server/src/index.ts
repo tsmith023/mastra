@@ -1,27 +1,60 @@
 import fs from 'node:fs/promises';
+import { MCPServer } from '@mastra/mcp';
 
-import { FastMCP } from 'tylerbarnes-fastmcp-fix';
+import { logger, createLogger } from './logger';
+import { prepare } from './prepare-docs/prepare';
+import { blogTool } from './tools/blog';
+import { changesTool } from './tools/changes';
+import {
+  startMastraCourse,
+  getMastraCourseStatus,
+  startMastraCourseLesson,
+  nextMastraCourseStep,
+  clearMastraCourseHistory,
+} from './tools/course';
+import { docsTool } from './tools/docs';
+import { examplesTool } from './tools/examples';
+import { fromPackageRoot } from './utils';
 
-import { prepare } from './prepare-docs/prepare.js';
-import { blogTool } from './tools/blog.js';
-import { changesTool } from './tools/changes.js';
-import { docsTool } from './tools/docs.js';
-import { examplesTool } from './tools/examples.js';
-import { fromPackageRoot } from './utils.js';
+let server: MCPServer;
 
 if (process.env.REBUILD_DOCS_ON_START === 'true') {
-  await prepare();
+  void logger.info('Rebuilding docs on start');
+  try {
+    await prepare();
+    void logger.info('Docs rebuilt successfully');
+  } catch (error) {
+    void logger.error('Failed to rebuild docs', error);
+  }
 }
 
-const server = new FastMCP({
+server = new MCPServer({
   name: 'Mastra Documentation Server',
   version: JSON.parse(await fs.readFile(fromPackageRoot(`package.json`), 'utf8')).version,
+  tools: {
+    mastraBlog: blogTool,
+    mastraDocs: docsTool,
+    mastraExamples: examplesTool,
+    mastraChanges: changesTool,
+    startMastraCourse,
+    getMastraCourseStatus,
+    startMastraCourseLesson,
+    nextMastraCourseStep,
+    clearMastraCourseHistory,
+  },
 });
 
-// Add tools
-server.addTool(blogTool);
-server.addTool(docsTool);
-server.addTool(examplesTool);
-server.addTool(changesTool);
+// Update logger with server instance
+Object.assign(logger, createLogger(server));
 
-export { server };
+async function runServer() {
+  try {
+    await server.startStdio();
+    void logger.info('Started Mastra Docs MCP Server');
+  } catch (error) {
+    void logger.error('Failed to start server', error);
+    process.exit(1);
+  }
+}
+
+export { runServer, server };

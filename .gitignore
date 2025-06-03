@@ -5,6 +5,7 @@ dist/
 # IDE
 .vscode/
 .idea/
+.history/
 
 # Dev artifacts
 .dev/db/*
@@ -19,6 +20,7 @@ openapi-ts-error*
 
 .mastra
 memory.db
+memory.db-*
 
 # github actions
 .secrets
@@ -29,3 +31,5 @@ memory.db
 # Test directories
 voice/**/test-outputs/
 voice/**/test-data/
+
+serviceAccount.json

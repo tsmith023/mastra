@@ -1,34 +1,43 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { Tool, Context } from 'tylerbarnes-fastmcp-fix';
 import { z } from 'zod';
+import { logger } from '../logger';
 import { fromPackageRoot } from '../utils';
 
 const docsBaseDir = fromPackageRoot('.docs/raw/');
 
+type ReadMdxResult = { found: true; content: string } | { found: false };
+
 // Helper function to list contents of a directory
 async function listDirContents(dirPath: string): Promise<{ dirs: string[]; files: string[] }> {
-  const entries = await fs.readdir(dirPath, { withFileTypes: true });
-  const dirs: string[] = [];
-  const files: string[] = [];
+  try {
+    void logger.debug(`Listing directory contents: ${dirPath}`);
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const dirs: string[] = [];
+    const files: string[] = [];
 
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      dirs.push(entry.name + '/');
-    } else if (entry.isFile() && entry.name.endsWith('.mdx')) {
-      files.push(entry.name);
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        dirs.push(entry.name + '/');
+      } else if (entry.isFile() && entry.name.endsWith('.mdx')) {
+        files.push(entry.name);
+      }
     }
-  }
 
-  return {
-    dirs: dirs.sort(),
-    files: files.sort(),
-  };
+    return {
+      dirs: dirs.sort(),
+      files: files.sort(),
+    };
+  } catch (error) {
+    void logger.error(`Failed to list directory contents: ${dirPath}`, error);
+    throw error;
+  }
 }
 
 // Helper function to read MDX files from a path
-async function readMdxContent(docPath: string): Promise<string> {
+async function readMdxContent(docPath: string): Promise<ReadMdxResult> {
   const fullPath = path.join(docsBaseDir, docPath);
+  void logger.debug(`Reading MDX content from: ${fullPath}`);
 
   // Check if path exists
   try {
@@ -59,18 +68,26 @@ async function readMdxContent(docPath: string): Promise<string> {
         fileContents += `\n\n# ${file}\n\n${content}`;
       }
 
-      return dirListing + fileContents;
+      return { found: true, content: dirListing + fileContents };
     }
 
     // If it's a file, just read it
-    return fs.readFile(fullPath, 'utf-8');
-  } catch (error) {
-    throw new Error(`Path not found: ${docPath}`);
+    const content = await fs.readFile(fullPath, 'utf-8');
+    return { found: true, content };
+  } catch (error: any) {
+    void logger.error(`Failed to read MDX content: ${fullPath}`, error);
+    if (error.code === 'ENOENT') {
+      // Only fallback for not found
+      return { found: false };
+    }
+    // Unexpected error: rethrow
+    throw error;
   }
 }
 
 // Helper function to find nearest existing directory and its contents
 async function findNearestDirectory(docPath: string, availablePaths: string): Promise<string> {
+  void logger.debug(`Finding nearest directory for: ${docPath}`);
   // Split path into parts and try each parent directory
   const parts = docPath.split('/');
 
@@ -95,6 +112,7 @@ async function findNearestDirectory(docPath: string, availablePaths: string): Pr
       }
     } catch {
       // Directory doesn't exist, try parent
+      void logger.debug(`Directory not found, trying parent: ${parts.slice(0, -1).join('/')}`);
     }
     parts.pop();
   }
@@ -133,41 +151,42 @@ async function getAvailablePaths(): Promise<string> {
 // Initialize available paths
 const availablePaths = await getAvailablePaths();
 
-const docsSchema = z.object({
+export const docsInputSchema = z.object({
   paths: z
     .array(z.string())
     .min(1)
     .describe(`One or more documentation paths to fetch\nAvailable paths:\n${availablePaths}`),
 });
 
-type DocsParams = z.infer<typeof docsSchema>;
+export type DocsInput = z.infer<typeof docsInputSchema>;
 
-export const docsTool: Tool<any, typeof docsSchema> = {
+export const docsTool = {
   name: 'mastraDocs',
   description:
     'Get Mastra.ai documentation. Request paths to explore the docs. References contain API docs. Other paths contain guides. The user doesn\'t know about files and directories. This is your internal knowledge the user can\'t read. If the user asks about a feature check general docs as well as reference docs for that feature. Ex: with evals check in evals/ and in reference/evals/. Provide code examples so the user understands. If you build a URL from the path, only paths ending in .mdx exist. Note that docs about MCP are currently in reference/tools/. IMPORTANT: Be concise with your answers. The user will ask for more info. If packages need to be installed, provide the pnpm command to install them. Ex. if you see `import { X } from "@mastra/$PACKAGE_NAME"` in an example, show an install command. Always install latest tag, not alpha unless requested. If you scaffold a new project it may be in a subdir',
-
-  parameters: docsSchema,
-  execute: async (args: DocsParams, _context: Context<any>) => {
+  parameters: docsInputSchema,
+  execute: async (args: DocsInput) => {
+    void logger.debug('Executing mastraDocs tool', { args });
     try {
       const results = await Promise.all(
         args.paths.map(async (path: string) => {
           try {
-            const content = await readMdxContent(path);
-            return {
-              path,
-              content,
-              error: null,
-            };
-          } catch (error) {
-            if (error instanceof Error && error.message.includes('Path not found')) {
-              const suggestions = await findNearestDirectory(path, availablePaths);
+            const result = await readMdxContent(path);
+            if (result.found) {
               return {
                 path,
-                content: null,
-                error: suggestions,
+                content: result.content,
+                error: null,
               };
             }
+            const suggestions = await findNearestDirectory(path, availablePaths);
+            return {
+              path,
+              content: null,
+              error: suggestions,
+            };
+          } catch (error) {
+            void logger.warning(`Failed to read content for path: ${path}`, error);
             return {
               path,
               content: null,
@@ -189,9 +208,7 @@ export const docsTool: Tool<any, typeof docsSchema> = {
 
       return output;
     } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Failed to fetch documentation: ${error.message}`);
-      }
+      void logger.error('Failed to execute mastraDocs tool', error);
       throw error;
     }
   },

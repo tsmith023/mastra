@@ -1,5 +1,5 @@
 import { spawn as spwn } from 'child_process';
-import path, { dirname, join } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { RollupOutput } from 'rollup';
 import { rollup } from 'rollup';
@@ -47,25 +47,21 @@ beforeAll(async () => {
   output = bundlerOutput;
 }, 0);
 
-it.for([
-  ['DefaultStorage'],
-  ['DefaultVectorDB'],
-  ['LibSQLStore'],
-  ['MastraVector'],
-  ['DefaultVectorDBMongo'],
-  ['defaultEmbedder'],
-])('should not include %s when importing /storage', ([exportName]) => {
-  const renderedExports: string[] = [];
-  const removedExports: string[] = [];
-  for (const chunk of output!) {
-    if (chunk.type === 'chunk') {
-      for (const module of Object.values(chunk.modules)) {
-        renderedExports.push(...module.renderedExports);
-        removedExports.push(...module.removedExports);
+it.for([['DefaultStorage'], ['DefaultVectorDB'], ['LibSQLStore'], ['MastraVector'], ['DefaultVectorDBMongo']])(
+  'should not include %s when importing /storage',
+  ([exportName]) => {
+    const renderedExports: string[] = [];
+    const removedExports: string[] = [];
+    for (const chunk of output!) {
+      if (chunk.type === 'chunk') {
+        for (const module of Object.values(chunk.modules)) {
+          renderedExports.push(...module.renderedExports);
+          removedExports.push(...module.removedExports);
+        }
       }
     }
-  }
 
-  expect(renderedExports).not.toContain(exportName);
-  expect(removedExports).not.toContain(exportName);
-});
+    expect(renderedExports).not.toContain(exportName);
+    expect(removedExports).not.toContain(exportName);
+  },
+);

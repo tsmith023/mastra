@@ -1,69 +1,66 @@
 import { createTool } from '@mastra/core/tools';
-import type { EmbeddingModel } from 'ai';
 import { z } from 'zod';
 
 import { rerank } from '../rerank';
 import type { RerankConfig } from '../rerank';
-import {
-  vectorQuerySearch,
-  defaultVectorQueryDescription,
-  filterDescription,
-  topKDescription,
-  queryTextDescription,
-} from '../utils';
+import { vectorQuerySearch, defaultVectorQueryDescription, filterSchema, outputSchema, baseSchema } from '../utils';
+import type { RagTool } from '../utils';
+import { convertToSources } from '../utils/convert-sources';
+import type { VectorQueryToolOptions } from './types';
 
-export const createVectorQueryTool = ({
-  vectorStoreName,
-  indexName,
-  model,
-  enableFilter = false,
-  reranker,
-  id,
-  description,
-}: {
-  vectorStoreName: string;
-  indexName: string;
-  model: EmbeddingModel<string>;
-  enableFilter?: boolean;
-  reranker?: RerankConfig;
-  id?: string;
-  description?: string;
-}): ReturnType<typeof createTool> => {
-  const toolId = id || `VectorQuery ${vectorStoreName} ${indexName} Tool`;
+export const createVectorQueryTool = (options: VectorQueryToolOptions) => {
+  const { model, id, description } = options;
+  const toolId = id || `VectorQuery ${options.vectorStoreName} ${options.indexName} Tool`;
   const toolDescription = description || defaultVectorQueryDescription();
-  // Create base schema with required fields
-  const baseSchema = {
-    queryText: z.string().describe(queryTextDescription),
-    topK: z.coerce.number().describe(topKDescription),
-  };
-  const inputSchema = enableFilter
-    ? z
-        .object({
-          ...baseSchema,
-          filter: z.coerce.string().describe(filterDescription),
-        })
-        .passthrough()
-    : z.object(baseSchema).passthrough();
+  const inputSchema = options.enableFilter ? filterSchema : z.object(baseSchema).passthrough();
+
   return createTool({
     id: toolId,
-    inputSchema,
-    outputSchema: z.object({
-      relevantContext: z.any(),
-    }),
     description: toolDescription,
-    execute: async ({ context: { queryText, topK, filter }, mastra }) => {
-      const topKValue =
-        typeof topK === 'number' && !isNaN(topK)
-          ? topK
-          : typeof topK === 'string' && !isNaN(Number(topK))
-            ? Number(topK)
-            : 10;
+    inputSchema,
+    outputSchema,
+    execute: async ({ context, mastra, runtimeContext }) => {
+      const indexName: string = runtimeContext.get('indexName') ?? options.indexName;
+      const vectorStoreName: string = runtimeContext.get('vectorStoreName') ?? options.vectorStoreName;
+      const includeVectors: boolean = runtimeContext.get('includeVectors') ?? options.includeVectors ?? false;
+      const includeSources: boolean = runtimeContext.get('includeSources') ?? options.includeSources ?? true;
+      const reranker: RerankConfig = runtimeContext.get('reranker') ?? options.reranker;
+      const databaseConfig = runtimeContext.get('databaseConfig') ?? options.databaseConfig;
 
-      const vectorStore = mastra?.getVector(vectorStoreName);
+      if (!indexName) throw new Error(`indexName is required, got: ${indexName}`);
+      if (!vectorStoreName) throw new Error(`vectorStoreName is required, got: ${vectorStoreName}`);
+
+      const topK: number = runtimeContext.get('topK') ?? context.topK ?? 10;
+      const filter: Record<string, any> = runtimeContext.get('filter') ?? context.filter;
+      const queryText = context.queryText;
+      const enableFilter = !!runtimeContext.get('filter') || (options.enableFilter ?? false);
+
       const logger = mastra?.getLogger();
+      if (!logger) {
+        console.warn(
+          '[VectorQueryTool] Logger not initialized: no debug or error logs will be recorded for this tool execution.',
+        );
+      }
+      if (logger) {
+        logger.debug('[VectorQueryTool] execute called with:', { queryText, topK, filter, databaseConfig });
+      }
+      try {
+        const topKValue =
+          typeof topK === 'number' && !isNaN(topK)
+            ? topK
+            : typeof topK === 'string' && !isNaN(Number(topK))
+              ? Number(topK)
+              : 10;
 
-      // Get relevant chunks from the vector database
-      if (vectorStore) {
+        const vectorStore = mastra?.getVector(vectorStoreName);
+
+        if (!vectorStore) {
+          if (logger) {
+            logger.error('Vector store not found', { vectorStoreName });
+          }
+          return { relevantContext: [], sources: [] };
+        }
+        // Get relevant chunks from the vector database
         let queryFilter = {};
         if (enableFilter && filter) {
           queryFilter = (() => {
@@ -79,7 +76,7 @@ export const createVectorQueryTool = ({
           })();
         }
         if (logger) {
-          logger.debug('Using this filter and topK:', { queryFilter, topK: topKValue });
+          logger.debug('Prepared vector query parameters', { queryText, topK: topKValue, queryFilter, databaseConfig });
         }
 
         const { results } = await vectorQuerySearch({
@@ -89,24 +86,52 @@ export const createVectorQueryTool = ({
           model,
           queryFilter: Object.keys(queryFilter || {}).length > 0 ? queryFilter : undefined,
           topK: topKValue,
+          includeVectors,
+          databaseConfig,
         });
+        if (logger) {
+          logger.debug('vectorQuerySearch returned results', { count: results.length });
+        }
         if (reranker) {
+          if (logger) {
+            logger.debug('Reranking results', { rerankerModel: reranker.model, rerankerOptions: reranker.options });
+          }
           const rerankedResults = await rerank(results, queryText, reranker.model, {
             ...reranker.options,
             topK: reranker.options?.topK || topKValue,
           });
+          if (logger) {
+            logger.debug('Reranking complete', { rerankedCount: rerankedResults.length });
+          }
           const relevantChunks = rerankedResults.map(({ result }) => result?.metadata);
-          return { relevantContext: relevantChunks };
+          if (logger) {
+            logger.debug('Returning reranked relevant context chunks', { count: relevantChunks.length });
+          }
+          const sources = includeSources ? convertToSources(rerankedResults) : [];
+          return { relevantContext: relevantChunks, sources };
         }
 
         const relevantChunks = results.map(result => result?.metadata);
+        if (logger) {
+          logger.debug('Returning relevant context chunks', { count: relevantChunks.length });
+        }
+        // `sources` exposes the full retrieval objects
+        const sources = includeSources ? convertToSources(results) : [];
         return {
           relevantContext: relevantChunks,
+          sources,
         };
+      } catch (err) {
+        if (logger) {
+          logger.error('Unexpected error in VectorQueryTool execute', {
+            error: err,
+            errorMessage: err instanceof Error ? err.message : String(err),
+            errorStack: err instanceof Error ? err.stack : undefined,
+          });
+        }
+        return { relevantContext: [], sources: [] };
       }
-      return {
-        relevantContext: [],
-      };
     },
-  });
+    // Use any for output schema as the structure of the output causes type inference issues
+  }) as RagTool<typeof inputSchema, any>;
 };

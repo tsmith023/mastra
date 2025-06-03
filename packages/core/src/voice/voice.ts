@@ -146,7 +146,6 @@ export abstract class MastraVoice<
    */
   addInstructions(_instructions?: string): void {
     // Default implementation - voice providers can override if they support this feature
-    this.logger.warn('addInstructions not implemented by this voice provider');
   }
 
   /**
@@ -155,7 +154,6 @@ export abstract class MastraVoice<
    */
   addTools(_tools: TTools): void {
     // Default implementation - voice providers can override if they support this feature
-    this.logger.warn('addTools not implemented by this voice provider');
   }
 
   /**
@@ -206,5 +204,15 @@ export abstract class MastraVoice<
     // Default implementation - voice providers can override if they support this feature
     this.logger.warn('getSpeakers not implemented by this voice provider');
     return Promise.resolve([]);
+  }
+
+  /**
+   * Get available speakers/voices
+   * @returns Array of available voice IDs and their metadata
+   */
+  getListener(): Promise<{ enabled: boolean }> {
+    // Default implementation - voice providers can override if they support this feature
+    this.logger.warn('getListener not implemented by this voice provider');
+    return Promise.resolve({ enabled: false });
   }
 }

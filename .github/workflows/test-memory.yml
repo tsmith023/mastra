@@ -4,17 +4,33 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "packages/memory/**"
-      - "packages/memory/*/package.json"
-      - "stores/**"
-      - "stores/*/package.json"
-      - ".github/workflows/test-memory.yml"
+      - 'packages/memory/**'
+      - 'packages/memory/*/package.json'
+      - 'stores/**'
+      - 'stores/*/package.json'
+      - 'packages/core/**'
+      - 'packages/deployer/**'
+      - 'packages/server/**'
+      - 'client-sdks/client-js/**'
+      - '.github/workflows/test-memory.yml'
 
 jobs:
   test:
     # Only run on the main repository, not on forks
     if: ${{ github.repository == 'mastra-ai/mastra' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - pg
+          - upstash
+          - libsql
+          - streaming
+          - working-memory
+          - agent-memory
+          - processors
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -38,37 +54,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
+      - uses: pnpm/action-setup@v4
+        name: Install pnpm
         with:
-          version: 9.7.0
+          run_install: false
 
-      - name: Setup Node.js
+      - name: Setup Node.js 20.x
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "pnpm"
+          node-version: 20.19.1
+          cache: 'pnpm'
 
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build core
-        run: pnpm build:core
-
       - name: Build vector+store packages
-        run: pnpm build:combined-stores
+        run: pnpm turbo build --filter "./stores/*" --filter "mastra" --filter "@mastra/memory" --filter "@mastra/fastembed"
 
-      - name: Build Mastra CLI (used in int tests)
-        run: pnpm build:cli
+      - name: Compile TypeScript Workers
+        run: |
+          npx tsc packages/memory/integration-tests/src/worker/generic-memory-worker.ts packages/memory/integration-tests/src/worker/mock-embedder.ts --esModuleInterop --resolveJsonModule --module commonjs --target es2020 --outDir packages/memory/ --rootDir packages/memory/ --skipLibCheck
 
-      - name: Build memory
-        run: pnpm build:memory
+      - name: List compiled worker directory
+        run: ls -R packages/memory/integration-tests/src/worker
 
-      - name: Run Memory tests
-        run: pnpm test:memory
+      - name: Run Memory ${{ matrix.suite }} tests
+        run: pnpm run test:${{ matrix.suite }}
+        working-directory: packages/memory/integration-tests
         env:
-          NODE_OPTIONS: "--max_old_space_size=8096"
-          DB_URL: "postgresql://postgres:postgres@localhost:5432/mastra"
+          NODE_OPTIONS: '--max_old_space_size=8096'
+          DB_URL: 'postgresql://postgres:postgres@localhost:5432/mastra'
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
           KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}

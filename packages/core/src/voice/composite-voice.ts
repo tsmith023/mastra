@@ -1,5 +1,5 @@
 import type { ToolsInput } from '../agent';
-import { MastraVoice } from '.';
+import { MastraVoice } from './voice';
 import type { VoiceEventType, VoiceEventMap } from '.';
 
 export class CompositeVoice extends MastraVoice<unknown, unknown, unknown, ToolsInput, VoiceEventMap> {
@@ -8,18 +8,28 @@ export class CompositeVoice extends MastraVoice<unknown, unknown, unknown, Tools
   protected realtimeProvider?: MastraVoice;
 
   constructor({
+    input,
+    output,
+    realtime,
     speakProvider,
     listenProvider,
     realtimeProvider,
   }: {
+    /** @deprecated use output instead */
     speakProvider?: MastraVoice;
+    /** @deprecated use input instead */
     listenProvider?: MastraVoice;
+    /** @deprecated use realtime instead */
     realtimeProvider?: MastraVoice;
+
+    input?: MastraVoice;
+    output?: MastraVoice;
+    realtime?: MastraVoice;
   }) {
     super();
-    this.speakProvider = speakProvider;
-    this.listenProvider = listenProvider;
-    this.realtimeProvider = realtimeProvider;
+    this.speakProvider = output || speakProvider;
+    this.listenProvider = input || listenProvider;
+    this.realtimeProvider = realtime || realtimeProvider;
   }
 
   /**
@@ -59,6 +69,16 @@ export class CompositeVoice extends MastraVoice<unknown, unknown, unknown, Tools
     }
 
     throw new Error('No speak provider or realtime provider configured');
+  }
+
+  async getListener() {
+    if (this.realtimeProvider) {
+      return this.realtimeProvider.getListener();
+    } else if (this.listenProvider) {
+      return this.listenProvider.getListener();
+    }
+
+    throw new Error('No listener provider or realtime provider configured');
   }
 
   updateConfig(options: Record<string, unknown>): void {

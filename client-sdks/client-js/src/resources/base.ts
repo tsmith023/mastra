@@ -1,4 +1,4 @@
-import type { RequestFunction, RequestOptions, ClientOptions } from '../types';
+import type { RequestOptions, ClientOptions } from '../types';
 
 export class BaseResource {
   readonly options: ClientOptions;
@@ -21,12 +21,13 @@ export class BaseResource {
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const response = await fetch(`${baseUrl}${path}`, {
+        const response = await fetch(`${baseUrl.replace(/\/$/, '')}${path}`, {
           ...options,
           headers: {
             ...headers,
             ...options.headers,
-            'x-mastra-client-type': 'js',
+            // TODO: Bring this back once we figure out what we/users need to do to make this work with cross-origin requests
+            // 'x-mastra-client-type': 'js',
           },
           body:
             options.body instanceof FormData ? options.body : options.body ? JSON.stringify(options.body) : undefined,

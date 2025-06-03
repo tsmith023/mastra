@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { serve } from '@hono/node-server';
-import { MCPConfiguration } from '@mastra/mcp';
+import { MCPClient } from '@mastra/mcp';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 
@@ -22,6 +22,19 @@ app.get('/blog/principles-of-ai-engineering', (c: Context) => {
   return c.html(blogPostFixture);
 });
 
+app.get('/blog/rate-limited', (_c: Context) => {
+  console.log('Rate limit exceeded');
+  return new Response('Rate limit exceeded', {
+    status: 429,
+    statusText: 'Too Many Requests',
+  });
+});
+
+app.get('/blog/empty-post', (c: Context) => {
+  console.log('Empty post');
+  return c.html('<html><body></body></html>');
+});
+
 // Start the server
 export const server = serve({
   fetch: app.fetch,
@@ -31,7 +44,7 @@ export const server = serve({
 // Get the actual port the server is running on
 const port = (server.address() as { port: number }).port;
 
-export const mcp = new MCPConfiguration({
+export const mcp = new MCPClient({
   id: 'test-mcp',
   servers: {
     mastra: {

@@ -2,8 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fromPackageRoot, fromRepoRoot, log } from '../utils.js';
 
-const DOCS_SOURCE = fromRepoRoot('docs/src/pages/docs');
+const DOCS_SOURCE = fromRepoRoot('docs/src/content/en/docs');
+const REFERENCE_SOURCE = fromRepoRoot('docs/src/content/en/reference');
+const COURSE_SOURCE = fromRepoRoot('docs/src/course');
 const DOCS_DEST = fromPackageRoot('.docs/raw');
+const REFERENCE_DEST = path.join(DOCS_DEST, 'reference');
+const COURSE_DEST = path.join(DOCS_DEST, 'course');
 
 async function copyDir(src: string, dest: string) {
   // Create destination directory
@@ -19,8 +23,8 @@ async function copyDir(src: string, dest: string) {
     if (entry.isDirectory()) {
       // Recursively copy directories
       await copyDir(srcPath, destPath);
-    } else if (entry.isFile() && entry.name.endsWith('.mdx')) {
-      // Copy only MDX files
+    } else if (entry.isFile() && (entry.name.endsWith('.mdx') || entry.name.endsWith('.md'))) {
+      // Copy both mdx and md files
       await fs.copyFile(srcPath, destPath);
     }
   }
@@ -37,6 +41,8 @@ export async function copyRaw() {
 
     // Copy docs
     await copyDir(DOCS_SOURCE, DOCS_DEST);
+    await copyDir(REFERENCE_SOURCE, REFERENCE_DEST);
+    await copyDir(COURSE_SOURCE, COURSE_DEST);
     log('✅ Documentation files copied successfully');
   } catch (error) {
     console.error('❌ Failed to copy documentation files:', error);

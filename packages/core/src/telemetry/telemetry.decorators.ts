@@ -1,6 +1,6 @@
 import { trace, context, SpanStatusCode, SpanKind, propagation } from '@opentelemetry/api';
 
-import { hasActiveTelemetry } from './utility';
+import { hasActiveTelemetry, getBaggageValues } from './utility';
 
 // Decorator factory that takes optional spanName
 export function withSpan(options: {
@@ -49,21 +49,32 @@ export function withSpan(options: {
         }
       });
 
-      const currentBaggage = propagation.getBaggage(ctx);
-      // @ts-ignore
-      if (currentBaggage?.componentName) {
+      const { requestId, componentName, runId } = getBaggageValues(ctx);
+      if (requestId) {
+        span.setAttribute('http.request_id', requestId);
+      }
+
+      if (componentName) {
+        span.setAttribute('componentName', componentName);
         // @ts-ignore
-        span.setAttribute('componentName', currentBaggage?.componentName);
-        // @ts-ignore
-        span.setAttribute('runId', currentBaggage?.runId);
+        span.setAttribute('runId', runId);
         // @ts-ignore
       } else if (this && this.name) {
         // @ts-ignore
         span.setAttribute('componentName', this.name);
         // @ts-ignore
         span.setAttribute('runId', this.runId);
-        // @ts-ignore
-        ctx = propagation.setBaggage(ctx, { componentName: this.name, runId: this.runId });
+        ctx = propagation.setBaggage(
+          ctx,
+          propagation.createBaggage({
+            // @ts-ignore
+            componentName: { value: this.name },
+            // @ts-ignore
+            runId: { value: this.runId },
+            // @ts-ignore
+            'http.request_id': { value: requestId },
+          }),
+        );
       }
 
       let result;

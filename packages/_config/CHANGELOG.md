@@ -1,5 +1,29 @@
 # @internal/lint
 
+## 0.0.8
+
+## 0.0.7
+
+## 0.0.6
+
+## 0.0.5
+
+## 0.0.4
+
+## 0.0.3
+
+## 0.0.2
+
+### Patch Changes
+
+- 37bb612: Add Elastic-2.0 licensing for packages
+
+## 0.0.2-alpha.0
+
+### Patch Changes
+
+- 37bb612: Add Elastic-2.0 licensing for packages
+
 ## 0.0.1
 
 ### Patch Changes

@@ -1,28 +1,76 @@
-import type { MessageType, StorageThreadType } from '@mastra/core/memory';
-import { MastraStorage } from '@mastra/core/storage';
-import type { EvalRow, StorageColumn, StorageGetMessagesArg, TABLE_NAMES } from '@mastra/core/storage';
+import { MessageList } from '@mastra/core/agent';
+import type { MastraMessageV2 } from '@mastra/core/agent';
+import type { MetricResult } from '@mastra/core/eval';
+import type { MastraMessageV1, StorageThreadType } from '@mastra/core/memory';
+import {
+  MastraStorage,
+  TABLE_MESSAGES,
+  TABLE_THREADS,
+  TABLE_TRACES,
+  TABLE_WORKFLOW_SNAPSHOT,
+  TABLE_EVALS,
+} from '@mastra/core/storage';
+import type {
+  EvalRow,
+  StorageColumn,
+  StorageGetMessagesArg,
+  TABLE_NAMES,
+  WorkflowRun,
+  WorkflowRuns,
+} from '@mastra/core/storage';
+import { parseSqlIdentifier } from '@mastra/core/utils';
 import type { WorkflowRunState } from '@mastra/core/workflows';
 import pgPromise from 'pg-promise';
+import type { ISSLConfig } from 'pg-promise/typescript/pg-subset';
 
-export type PostgresConfig =
+export type PostgresConfig = {
+  schemaName?: string;
+} & (
   | {
       host: string;
       port: number;
       database: string;
       user: string;
       password: string;
+      ssl?: boolean | ISSLConfig;
     }
   | {
       connectionString: string;
-    };
+    }
+);
 
 export class PostgresStore extends MastraStorage {
   private db: pgPromise.IDatabase<{}>;
   private pgp: pgPromise.IMain;
+  private schema?: string;
+  private setupSchemaPromise: Promise<void> | null = null;
+  private schemaSetupComplete: boolean | undefined = undefined;
 
   constructor(config: PostgresConfig) {
+    // Validation: connectionString or host/database/user/password must not be empty
+    if ('connectionString' in config) {
+      if (
+        !config.connectionString ||
+        typeof config.connectionString !== 'string' ||
+        config.connectionString.trim() === ''
+      ) {
+        throw new Error(
+          'PostgresStore: connectionString must be provided and cannot be empty. Passing an empty string may cause fallback to local Postgres defaults.',
+        );
+      }
+    } else {
+      const required = ['host', 'database', 'user', 'password'];
+      for (const key of required) {
+        if (!(key in config) || typeof (config as any)[key] !== 'string' || (config as any)[key].trim() === '') {
+          throw new Error(
+            `PostgresStore: ${key} must be provided and cannot be empty. Passing an empty string may cause fallback to local Postgres defaults.`,
+          );
+        }
+      }
+    }
     super({ name: 'PostgresStore' });
     this.pgp = pgPromise();
+    this.schema = config.schemaName;
     this.db = this.pgp(
       `connectionString` in config
         ? { connectionString: config.connectionString }
@@ -32,12 +80,63 @@ export class PostgresStore extends MastraStorage {
             database: config.database,
             user: config.user,
             password: config.password,
+            ssl: config.ssl,
           },
     );
   }
 
-  getEvalsByAgentName(_agentName: string, _type?: 'test' | 'live'): Promise<EvalRow[]> {
-    throw new Error('Method not implemented.');
+  private getTableName(indexName: string) {
+    const parsedIndexName = parseSqlIdentifier(indexName, 'table name');
+    const parsedSchemaName = this.schema ? parseSqlIdentifier(this.schema, 'schema name') : undefined;
+    return parsedSchemaName ? `${parsedSchemaName}."${parsedIndexName}"` : `"${parsedIndexName}"`;
+  }
+
+  async getEvalsByAgentName(agentName: string, type?: 'test' | 'live'): Promise<EvalRow[]> {
+    try {
+      const baseQuery = `SELECT * FROM ${this.getTableName(TABLE_EVALS)} WHERE agent_name = $1`;
+      const typeCondition =
+        type === 'test'
+          ? " AND test_info IS NOT NULL AND test_info->>'testPath' IS NOT NULL"
+          : type === 'live'
+            ? " AND (test_info IS NULL OR test_info->>'testPath' IS NULL)"
+            : '';
+
+      const query = `${baseQuery}${typeCondition} ORDER BY created_at DESC`;
+
+      const rows = await this.db.manyOrNone(query, [agentName]);
+      return rows?.map(row => this.transformEvalRow(row)) ?? [];
+    } catch (error) {
+      // Handle case where table doesn't exist yet
+      if (error instanceof Error && error.message.includes('relation') && error.message.includes('does not exist')) {
+        return [];
+      }
+      console.error('Failed to get evals for the specified agent: ' + (error as any)?.message);
+      throw error;
+    }
+  }
+
+  private transformEvalRow(row: Record<string, any>): EvalRow {
+    let testInfoValue = null;
+    if (row.test_info) {
+      try {
+        testInfoValue = typeof row.test_info === 'string' ? JSON.parse(row.test_info) : row.test_info;
+      } catch (e) {
+        console.warn('Failed to parse test_info:', e);
+      }
+    }
+
+    return {
+      agentName: row.agent_name as string,
+      input: row.input as string,
+      output: row.output as string,
+      result: row.result as MetricResult,
+      metricName: row.metric_name as string,
+      instructions: row.instructions as string,
+      testInfo: testInfoValue,
+      globalRunId: row.global_run_id as string,
+      runId: row.run_id as string,
+      createdAt: row.created_at as string,
+    };
   }
 
   async batchInsert({ tableName, records }: { tableName: TABLE_NAMES; records: Record<string, any>[] }): Promise<void> {
@@ -60,12 +159,18 @@ export class PostgresStore extends MastraStorage {
     page,
     perPage,
     attributes,
+    filters,
+    fromDate,
+    toDate,
   }: {
     name?: string;
     scope?: string;
     page: number;
     perPage: number;
     attributes?: Record<string, string>;
+    filters?: Record<string, any>;
+    fromDate?: Date;
+    toDate?: Date;
   }): Promise<any[]> {
     let idx = 1;
     const limit = perPage;
@@ -82,8 +187,24 @@ export class PostgresStore extends MastraStorage {
     }
     if (attributes) {
       Object.keys(attributes).forEach(key => {
-        conditions.push(`attributes->>'${key}' = \$${idx++}`);
+        const parsedKey = parseSqlIdentifier(key, 'attribute key');
+        conditions.push(`attributes->>'${parsedKey}' = \$${idx++}`);
       });
+    }
+
+    if (filters) {
+      Object.entries(filters).forEach(([key]) => {
+        const parsedKey = parseSqlIdentifier(key, 'filter key');
+        conditions.push(`${parsedKey} = \$${idx++}`);
+      });
+    }
+
+    if (fromDate) {
+      conditions.push(`createdAt >= \$${idx++}`);
+    }
+
+    if (toDate) {
+      conditions.push(`createdAt <= \$${idx++}`);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -102,11 +223,19 @@ export class PostgresStore extends MastraStorage {
       }
     }
 
-    console.log(
-      'QUERY',
-      `SELECT * FROM ${MastraStorage.TABLE_TRACES} ${whereClause} ORDER BY "createdAt" DESC LIMIT ${limit} OFFSET ${offset}`,
-      args,
-    );
+    if (filters) {
+      for (const [, value] of Object.entries(filters)) {
+        args.push(value);
+      }
+    }
+
+    if (fromDate) {
+      args.push(fromDate.toISOString());
+    }
+
+    if (toDate) {
+      args.push(toDate.toISOString());
+    }
 
     const result = await this.db.manyOrNone<{
       id: string;
@@ -124,7 +253,7 @@ export class PostgresStore extends MastraStorage {
       other: any;
       createdAt: string;
     }>(
-      `SELECT * FROM ${MastraStorage.TABLE_TRACES} ${whereClause} ORDER BY "createdAt" DESC LIMIT ${limit} OFFSET ${offset}`,
+      `SELECT * FROM ${this.getTableName(TABLE_TRACES)} ${whereClause} ORDER BY "createdAt" DESC LIMIT ${limit} OFFSET ${offset}`,
       args,
     );
 
@@ -150,6 +279,55 @@ export class PostgresStore extends MastraStorage {
     })) as any;
   }
 
+  private async setupSchema() {
+    if (!this.schema || this.schemaSetupComplete) {
+      return;
+    }
+
+    if (!this.setupSchemaPromise) {
+      this.setupSchemaPromise = (async () => {
+        try {
+          // First check if schema exists and we have usage permission
+          const schemaExists = await this.db.oneOrNone(
+            `
+            SELECT EXISTS (
+              SELECT 1 FROM information_schema.schemata 
+              WHERE schema_name = $1
+            )
+          `,
+            [this.schema],
+          );
+
+          if (!schemaExists?.exists) {
+            try {
+              await this.db.none(`CREATE SCHEMA IF NOT EXISTS ${this.schema}`);
+              this.logger.info(`Schema "${this.schema}" created successfully`);
+            } catch (error) {
+              this.logger.error(`Failed to create schema "${this.schema}"`, { error });
+              throw new Error(
+                `Unable to create schema "${this.schema}". This requires CREATE privilege on the database. ` +
+                  `Either create the schema manually or grant CREATE privilege to the user.`,
+              );
+            }
+          }
+
+          // If we got here, schema exists and we can use it
+          this.schemaSetupComplete = true;
+          this.logger.debug(`Schema "${this.schema}" is ready for use`);
+        } catch (error) {
+          // Reset flags so we can retry
+          this.schemaSetupComplete = undefined;
+          this.setupSchemaPromise = null;
+          throw error;
+        } finally {
+          this.setupSchemaPromise = null;
+        }
+      })();
+    }
+
+    await this.setupSchemaPromise;
+  }
+
   async createTable({
     tableName,
     schema,
@@ -160,25 +338,31 @@ export class PostgresStore extends MastraStorage {
     try {
       const columns = Object.entries(schema)
         .map(([name, def]) => {
+          const parsedName = parseSqlIdentifier(name, 'column name');
           const constraints = [];
           if (def.primaryKey) constraints.push('PRIMARY KEY');
           if (!def.nullable) constraints.push('NOT NULL');
-          return `"${name}" ${def.type.toUpperCase()} ${constraints.join(' ')}`;
+          return `"${parsedName}" ${def.type.toUpperCase()} ${constraints.join(' ')}`;
         })
         .join(',\n');
 
+      // Create schema if it doesn't exist
+      if (this.schema) {
+        await this.setupSchema();
+      }
+
       const sql = `
-        CREATE TABLE IF NOT EXISTS ${tableName} (
+        CREATE TABLE IF NOT EXISTS ${this.getTableName(tableName)} (
           ${columns}
         );
         ${
-          tableName === MastraStorage.TABLE_WORKFLOW_SNAPSHOT
+          tableName === TABLE_WORKFLOW_SNAPSHOT
             ? `
         DO $$ BEGIN
           IF NOT EXISTS (
             SELECT 1 FROM pg_constraint WHERE conname = 'mastra_workflow_snapshot_workflow_name_run_id_key'
           ) THEN
-            ALTER TABLE ${tableName}
+            ALTER TABLE ${this.getTableName(tableName)}
             ADD CONSTRAINT mastra_workflow_snapshot_workflow_name_run_id_key
             UNIQUE (workflow_name, run_id);
           END IF;
@@ -197,7 +381,7 @@ export class PostgresStore extends MastraStorage {
 
   async clearTable({ tableName }: { tableName: TABLE_NAMES }): Promise<void> {
     try {
-      await this.db.none(`TRUNCATE TABLE ${tableName} CASCADE`);
+      await this.db.none(`TRUNCATE TABLE ${this.getTableName(tableName)} CASCADE`);
     } catch (error) {
       console.error(`Error clearing table ${tableName}:`, error);
       throw error;
@@ -206,12 +390,12 @@ export class PostgresStore extends MastraStorage {
 
   async insert({ tableName, record }: { tableName: TABLE_NAMES; record: Record<string, any> }): Promise<void> {
     try {
-      const columns = Object.keys(record);
+      const columns = Object.keys(record).map(col => parseSqlIdentifier(col, 'column name'));
       const values = Object.values(record);
       const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
 
       await this.db.none(
-        `INSERT INTO ${tableName} (${columns.map(c => `"${c}"`).join(', ')}) VALUES (${placeholders})`,
+        `INSERT INTO ${this.getTableName(tableName)} (${columns.map(c => `"${c}"`).join(', ')}) VALUES (${placeholders})`,
         values,
       );
     } catch (error) {
@@ -222,18 +406,21 @@ export class PostgresStore extends MastraStorage {
 
   async load<R>({ tableName, keys }: { tableName: TABLE_NAMES; keys: Record<string, string> }): Promise<R | null> {
     try {
-      const keyEntries = Object.entries(keys);
+      const keyEntries = Object.entries(keys).map(([key, value]) => [parseSqlIdentifier(key, 'column name'), value]);
       const conditions = keyEntries.map(([key], index) => `"${key}" = $${index + 1}`).join(' AND ');
       const values = keyEntries.map(([_, value]) => value);
 
-      const result = await this.db.oneOrNone<R>(`SELECT * FROM ${tableName} WHERE ${conditions}`, values);
+      const result = await this.db.oneOrNone<R>(
+        `SELECT * FROM ${this.getTableName(tableName)} WHERE ${conditions}`,
+        values,
+      );
 
       if (!result) {
         return null;
       }
 
       // If this is a workflow snapshot, parse the snapshot field
-      if (tableName === MastraStorage.TABLE_WORKFLOW_SNAPSHOT) {
+      if (tableName === TABLE_WORKFLOW_SNAPSHOT) {
         const snapshot = result as any;
         if (typeof snapshot.snapshot === 'string') {
           snapshot.snapshot = JSON.parse(snapshot.snapshot);
@@ -258,7 +445,7 @@ export class PostgresStore extends MastraStorage {
           metadata,
           "createdAt",
           "updatedAt"
-        FROM "${MastraStorage.TABLE_THREADS}"
+        FROM ${this.getTableName(TABLE_THREADS)}
         WHERE id = $1`,
         [threadId],
       );
@@ -289,7 +476,7 @@ export class PostgresStore extends MastraStorage {
           metadata,
           "createdAt",
           "updatedAt"
-        FROM "${MastraStorage.TABLE_THREADS}"
+        FROM ${this.getTableName(TABLE_THREADS)}
         WHERE "resourceId" = $1`,
         [resourceId],
       );
@@ -309,7 +496,7 @@ export class PostgresStore extends MastraStorage {
   async saveThread({ thread }: { thread: StorageThreadType }): Promise<StorageThreadType> {
     try {
       await this.db.none(
-        `INSERT INTO "${MastraStorage.TABLE_THREADS}" (
+        `INSERT INTO ${this.getTableName(TABLE_THREADS)} (
           id,
           "resourceId",
           title,
@@ -363,7 +550,7 @@ export class PostgresStore extends MastraStorage {
       };
 
       const thread = await this.db.one<StorageThreadType>(
-        `UPDATE "${MastraStorage.TABLE_THREADS}"
+        `UPDATE ${this.getTableName(TABLE_THREADS)}
         SET title = $1,
             metadata = $2,
             "updatedAt" = $3
@@ -388,10 +575,10 @@ export class PostgresStore extends MastraStorage {
     try {
       await this.db.tx(async t => {
         // First delete all messages associated with this thread
-        await t.none(`DELETE FROM "${MastraStorage.TABLE_MESSAGES}" WHERE thread_id = $1`, [threadId]);
+        await t.none(`DELETE FROM ${this.getTableName(TABLE_MESSAGES)} WHERE thread_id = $1`, [threadId]);
 
         // Then delete the thread
-        await t.none(`DELETE FROM "${MastraStorage.TABLE_THREADS}" WHERE id = $1`, [threadId]);
+        await t.none(`DELETE FROM ${this.getTableName(TABLE_THREADS)} WHERE id = $1`, [threadId]);
       });
     } catch (error) {
       console.error('Error deleting thread:', error);
@@ -399,7 +586,7 @@ export class PostgresStore extends MastraStorage {
     }
   }
 
-  async getMessages<T = unknown>({ threadId, selectBy }: StorageGetMessagesArg): Promise<T> {
+  async getMessages<T = unknown>({ threadId, selectBy }: StorageGetMessagesArg): Promise<T[]> {
     try {
       const messages: any[] = [];
       const limit = typeof selectBy?.last === `number` ? selectBy.last : 40;
@@ -412,7 +599,7 @@ export class PostgresStore extends MastraStorage {
             SELECT 
               *,
               ROW_NUMBER() OVER (ORDER BY "createdAt" DESC) as row_num
-            FROM "${MastraStorage.TABLE_MESSAGES}"
+            FROM ${this.getTableName(TABLE_MESSAGES)}
             WHERE thread_id = $1
           )
           SELECT
@@ -458,7 +645,7 @@ export class PostgresStore extends MastraStorage {
             type,
             "createdAt", 
             thread_id AS "threadId"
-        FROM "${MastraStorage.TABLE_MESSAGES}"
+        FROM ${this.getTableName(TABLE_MESSAGES)}
         WHERE thread_id = $1
         AND id != ALL($2)
         ORDER BY "createdAt" DESC
@@ -481,16 +668,24 @@ export class PostgresStore extends MastraStorage {
             // If parsing fails, leave as string
           }
         }
+        if (message.type === `v2`) delete message.type;
       });
 
-      return messages as T;
+      return messages as T[];
     } catch (error) {
       console.error('Error getting messages:', error);
       throw error;
     }
   }
 
-  async saveMessages({ messages }: { messages: MessageType[] }): Promise<MessageType[]> {
+  async saveMessages(args: { messages: MastraMessageV1[]; format?: undefined | 'v1' }): Promise<MastraMessageV1[]>;
+  async saveMessages(args: { messages: MastraMessageV2[]; format: 'v2' }): Promise<MastraMessageV2[]>;
+  async saveMessages({
+    messages,
+    format,
+  }:
+    | { messages: MastraMessageV1[]; format?: undefined | 'v1' }
+    | { messages: MastraMessageV2[]; format: 'v2' }): Promise<MastraMessageV2[] | MastraMessageV1[]> {
     if (messages.length === 0) return messages;
 
     try {
@@ -508,7 +703,7 @@ export class PostgresStore extends MastraStorage {
       await this.db.tx(async t => {
         for (const message of messages) {
           await t.none(
-            `INSERT INTO "${MastraStorage.TABLE_MESSAGES}" (id, thread_id, content, "createdAt", role, type) 
+            `INSERT INTO ${this.getTableName(TABLE_MESSAGES)} (id, thread_id, content, "createdAt", role, type) 
              VALUES ($1, $2, $3, $4, $5, $6)`,
             [
               message.id,
@@ -516,13 +711,15 @@ export class PostgresStore extends MastraStorage {
               typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
               message.createdAt || new Date().toISOString(),
               message.role,
-              message.type,
+              message.type || 'v2',
             ],
           );
         }
       });
 
-      return messages;
+      const list = new MessageList().add(messages, 'memory');
+      if (format === `v2`) return list.get.all.v2();
+      return list.get.all.v1();
     } catch (error) {
       console.error('Error saving messages:', error);
       throw error;
@@ -541,7 +738,7 @@ export class PostgresStore extends MastraStorage {
     try {
       const now = new Date().toISOString();
       await this.db.none(
-        `INSERT INTO "${MastraStorage.TABLE_WORKFLOW_SNAPSHOT}" (
+        `INSERT INTO ${this.getTableName(TABLE_WORKFLOW_SNAPSHOT)} (
           workflow_name,
           run_id,
           snapshot,
@@ -568,7 +765,7 @@ export class PostgresStore extends MastraStorage {
   }): Promise<WorkflowRunState | null> {
     try {
       const result = await this.load({
-        tableName: MastraStorage.TABLE_WORKFLOW_SNAPSHOT,
+        tableName: TABLE_WORKFLOW_SNAPSHOT,
         keys: {
           workflow_name: workflowName,
           run_id: runId,
@@ -582,6 +779,168 @@ export class PostgresStore extends MastraStorage {
       return (result as any).snapshot;
     } catch (error) {
       console.error('Error loading workflow snapshot:', error);
+      throw error;
+    }
+  }
+
+  private async hasColumn(table: string, column: string): Promise<boolean> {
+    // Use this.schema to scope the check
+    const schema = this.schema || 'public';
+    const result = await this.db.oneOrNone(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND (column_name = $3 OR column_name = $4)`,
+      [schema, table, column, column.toLowerCase()],
+    );
+    return !!result;
+  }
+
+  private parseWorkflowRun(row: any): WorkflowRun {
+    let parsedSnapshot: WorkflowRunState | string = row.snapshot as string;
+    if (typeof parsedSnapshot === 'string') {
+      try {
+        parsedSnapshot = JSON.parse(row.snapshot as string) as WorkflowRunState;
+      } catch (e) {
+        // If parsing fails, return the raw snapshot string
+        console.warn(`Failed to parse snapshot for workflow ${row.workflow_name}: ${e}`);
+      }
+    }
+
+    return {
+      workflowName: row.workflow_name,
+      runId: row.run_id,
+      snapshot: parsedSnapshot,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      resourceId: row.resourceId,
+    };
+  }
+
+  async getWorkflowRuns({
+    workflowName,
+    fromDate,
+    toDate,
+    limit,
+    offset,
+    resourceId,
+  }: {
+    workflowName?: string;
+    fromDate?: Date;
+    toDate?: Date;
+    limit?: number;
+    offset?: number;
+    resourceId?: string;
+  } = {}): Promise<WorkflowRuns> {
+    try {
+      const conditions: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+
+      if (workflowName) {
+        conditions.push(`workflow_name = $${paramIndex}`);
+        values.push(workflowName);
+        paramIndex++;
+      }
+
+      if (resourceId) {
+        const hasResourceId = await this.hasColumn(TABLE_WORKFLOW_SNAPSHOT, 'resourceId');
+        if (hasResourceId) {
+          conditions.push(`"resourceId" = $${paramIndex}`);
+          values.push(resourceId);
+          paramIndex++;
+        } else {
+          console.warn(`[${TABLE_WORKFLOW_SNAPSHOT}] resourceId column not found. Skipping resourceId filter.`);
+        }
+      }
+
+      if (fromDate) {
+        conditions.push(`"createdAt" >= $${paramIndex}`);
+        values.push(fromDate);
+        paramIndex++;
+      }
+
+      if (toDate) {
+        conditions.push(`"createdAt" <= $${paramIndex}`);
+        values.push(toDate);
+        paramIndex++;
+      }
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      let total = 0;
+      // Only get total count when using pagination
+      if (limit !== undefined && offset !== undefined) {
+        const countResult = await this.db.one(
+          `SELECT COUNT(*) as count FROM ${this.getTableName(TABLE_WORKFLOW_SNAPSHOT)} ${whereClause}`,
+          values,
+        );
+        total = Number(countResult.count);
+      }
+
+      // Get results
+      const query = `
+      SELECT * FROM ${this.getTableName(TABLE_WORKFLOW_SNAPSHOT)} 
+      ${whereClause} 
+      ORDER BY "createdAt" DESC
+      ${limit !== undefined && offset !== undefined ? ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}` : ''}
+    `;
+
+      const queryValues = limit !== undefined && offset !== undefined ? [...values, limit, offset] : values;
+
+      const result = await this.db.manyOrNone(query, queryValues);
+
+      const runs = (result || []).map(row => {
+        return this.parseWorkflowRun(row);
+      });
+
+      // Use runs.length as total when not paginating
+      return { runs, total: total || runs.length };
+    } catch (error) {
+      console.error('Error getting workflow runs:', error);
+      throw error;
+    }
+  }
+
+  async getWorkflowRunById({
+    runId,
+    workflowName,
+  }: {
+    runId: string;
+    workflowName?: string;
+  }): Promise<WorkflowRun | null> {
+    try {
+      const conditions: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+
+      if (runId) {
+        conditions.push(`run_id = $${paramIndex}`);
+        values.push(runId);
+        paramIndex++;
+      }
+
+      if (workflowName) {
+        conditions.push(`workflow_name = $${paramIndex}`);
+        values.push(workflowName);
+        paramIndex++;
+      }
+
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // Get results
+      const query = `
+      SELECT * FROM ${this.getTableName(TABLE_WORKFLOW_SNAPSHOT)} 
+      ${whereClause} 
+    `;
+
+      const queryValues = values;
+
+      const result = await this.db.oneOrNone(query, queryValues);
+
+      if (!result) {
+        return null;
+      }
+
+      return this.parseWorkflowRun(result);
+    } catch (error) {
+      console.error('Error getting workflow run by ID:', error);
       throw error;
     }
   }

@@ -14,6 +14,7 @@ export async function getInputOptions(
   entryFile: string,
   analyzedBundleInfo: Awaited<ReturnType<typeof analyzeBundle>>,
   platform: 'node' | 'browser',
+  env: Record<string, string> = { 'process.env.NODE_ENV': JSON.stringify('production') },
 ): Promise<InputOptions> {
   let nodeResolvePlugin =
     platform === 'node'
@@ -81,6 +82,17 @@ export async function getInputOptions(
             find: /^\#server$/,
             replacement: fileURLToPath(import.meta.resolve('@mastra/deployer/server')).replaceAll('\\', '/'),
           },
+          {
+            find: /^\@mastra\/server\/(.*)/,
+            replacement: `@mastra/server/$1`,
+            customResolver: id => {
+              if (id.startsWith('@mastra/server')) {
+                return {
+                  id: fileURLToPath(import.meta.resolve(id)),
+                };
+              }
+            },
+          },
           { find: /^\#mastra$/, replacement: normalizedEntryFile },
         ],
       }),
@@ -88,9 +100,7 @@ export async function getInputOptions(
         target: 'node20',
         platform,
         minify: false,
-        define: {
-          'process.env.NODE_ENV': JSON.stringify('production'),
-        },
+        define: env,
       }),
       commonjs({
         extensions: ['.js', '.ts'],

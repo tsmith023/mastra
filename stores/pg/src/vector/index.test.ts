@@ -1,4 +1,5 @@
 import type { QueryResult } from '@mastra/core';
+import * as pg from 'pg';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 
 import { PgVector } from '.';
@@ -11,32 +12,44 @@ describe('PgVector', () => {
 
   beforeAll(async () => {
     // Initialize PgVector
-    vectorDB = new PgVector(connectionString);
+    vectorDB = new PgVector({ connectionString });
   });
 
   afterAll(async () => {
     // Clean up test tables
-    await vectorDB.deleteIndex(testIndexName);
+    await vectorDB.deleteIndex({ indexName: testIndexName });
     await vectorDB.disconnect();
+  });
+
+  // --- Validation tests ---
+  describe('Validation', () => {
+    it('throws if connectionString is empty', () => {
+      expect(() => new PgVector({ connectionString: '' })).toThrow(
+        /connectionString must be provided and cannot be empty/,
+      );
+    });
+    it('does not throw on non-empty connection string', () => {
+      expect(() => new PgVector({ connectionString })).not.toThrow();
+    });
   });
 
   // Index Management Tests
   describe('Index Management', () => {
     describe('createIndex', () => {
       afterAll(async () => {
-        await vectorDB.deleteIndex(testIndexName2);
+        await vectorDB.deleteIndex({ indexName: testIndexName2 });
       });
 
       it('should create a new vector table with specified dimensions', async () => {
         await vectorDB.createIndex({ indexName: testIndexName, dimension: 3 });
-        const stats = await vectorDB.describeIndex(testIndexName);
+        const stats = await vectorDB.describeIndex({ indexName: testIndexName });
         expect(stats?.dimension).toBe(3);
         expect(stats?.count).toBe(0);
       });
 
       it('should create index with specified metric', async () => {
         await vectorDB.createIndex({ indexName: testIndexName2, dimension: 3, metric: 'euclidean' });
-        const stats = await vectorDB.describeIndex(testIndexName2);
+        const stats = await vectorDB.describeIndex({ indexName: testIndexName2 });
         expect(stats.metric).toBe('euclidean');
       });
 
@@ -51,7 +64,7 @@ describe('PgVector', () => {
           metric: 'cosine',
           indexConfig: { type: 'flat' },
         });
-        const stats = await vectorDB.describeIndex(testIndexName2);
+        const stats = await vectorDB.describeIndex({ indexName: testIndexName2 });
         expect(stats.type).toBe('flat');
       });
 
@@ -62,7 +75,7 @@ describe('PgVector', () => {
           metric: 'cosine',
           indexConfig: { type: 'hnsw', hnsw: { m: 16, efConstruction: 64 } }, // Any reasonable values work
         });
-        const stats = await vectorDB.describeIndex(testIndexName2);
+        const stats = await vectorDB.describeIndex({ indexName: testIndexName2 });
         expect(stats.type).toBe('hnsw');
         expect(stats.config.m).toBe(16);
       });
@@ -74,7 +87,7 @@ describe('PgVector', () => {
           metric: 'cosine',
           indexConfig: { type: 'ivfflat', ivf: { lists: 100 } },
         });
-        const stats = await vectorDB.describeIndex(testIndexName2);
+        const stats = await vectorDB.describeIndex({ indexName: testIndexName2 });
         expect(stats.type).toBe('ivfflat');
         expect(stats.config.lists).toBe(100);
       });
@@ -87,7 +100,7 @@ describe('PgVector', () => {
       });
 
       afterAll(async () => {
-        await vectorDB.deleteIndex(indexName);
+        await vectorDB.deleteIndex({ indexName });
       });
 
       it('should list all vector tables', async () => {
@@ -96,7 +109,7 @@ describe('PgVector', () => {
       });
 
       it('should not return created index in list if it is deleted', async () => {
-        await vectorDB.deleteIndex(indexName);
+        await vectorDB.deleteIndex({ indexName });
         const indexes = await vectorDB.listIndexes();
         expect(indexes).not.toContain(indexName);
       });
@@ -109,7 +122,7 @@ describe('PgVector', () => {
       });
 
       afterAll(async () => {
-        await vectorDB.deleteIndex(indexName);
+        await vectorDB.deleteIndex({ indexName });
       });
 
       it('should return correct index stats', async () => {
@@ -120,7 +133,7 @@ describe('PgVector', () => {
         ];
         await vectorDB.upsert({ indexName, vectors });
 
-        const stats = await vectorDB.describeIndex(indexName);
+        const stats = await vectorDB.describeIndex({ indexName });
         expect(stats).toEqual({
           type: 'ivfflat',
           config: {
@@ -133,7 +146,7 @@ describe('PgVector', () => {
       });
 
       it('should throw error for non-existent index', async () => {
-        await expect(vectorDB.describeIndex('non_existent')).rejects.toThrow();
+        await expect(vectorDB.describeIndex({ indexName: 'non_existent' })).rejects.toThrow();
       });
     });
 
@@ -144,7 +157,7 @@ describe('PgVector', () => {
       });
 
       afterAll(async () => {
-        await vectorDB.deleteIndex(indexName);
+        await vectorDB.deleteIndex({ indexName });
       });
 
       it('should build index with specified metric and config', async () => {
@@ -154,7 +167,7 @@ describe('PgVector', () => {
           indexConfig: { type: 'hnsw', hnsw: { m: 16, efConstruction: 64 } },
         });
 
-        const stats = await vectorDB.describeIndex(indexName);
+        const stats = await vectorDB.describeIndex({ indexName });
         expect(stats.type).toBe('hnsw');
         expect(stats.metric).toBe('cosine');
         expect(stats.config.m).toBe(16);
@@ -167,7 +180,7 @@ describe('PgVector', () => {
           indexConfig: { type: 'ivfflat', ivf: { lists: 100 } },
         });
 
-        const stats = await vectorDB.describeIndex(indexName);
+        const stats = await vectorDB.describeIndex({ indexName });
         expect(stats.type).toBe('ivfflat');
         expect(stats.metric).toBe('euclidean');
         expect(stats.config.lists).toBe(100);
@@ -183,7 +196,7 @@ describe('PgVector', () => {
       });
 
       afterEach(async () => {
-        await vectorDB.deleteIndex(testIndexName);
+        await vectorDB.deleteIndex({ indexName: testIndexName });
       });
 
       it('should insert new vectors', async () => {
@@ -194,7 +207,7 @@ describe('PgVector', () => {
         const ids = await vectorDB.upsert({ indexName: testIndexName, vectors });
 
         expect(ids).toHaveLength(2);
-        const stats = await vectorDB.describeIndex(testIndexName);
+        const stats = await vectorDB.describeIndex({ indexName: testIndexName });
         expect(stats.count).toBe(2);
       });
 
@@ -248,7 +261,7 @@ describe('PgVector', () => {
       });
 
       afterEach(async () => {
-        await vectorDB.deleteIndex(testIndexName);
+        await vectorDB.deleteIndex({ indexName: testIndexName });
       });
 
       it('should update the vector by id', async () => {
@@ -266,7 +279,7 @@ describe('PgVector', () => {
           metadata: newMetaData,
         };
 
-        await vectorDB.updateIndexById(testIndexName, idToBeUpdated, update);
+        await vectorDB.updateVector({ indexName: testIndexName, id: idToBeUpdated, update });
 
         const results: QueryResult[] = await vectorDB.query({
           indexName: testIndexName,
@@ -292,7 +305,7 @@ describe('PgVector', () => {
           metadata: newMetaData,
         };
 
-        await vectorDB.updateIndexById(testIndexName, idToBeUpdated, update);
+        await vectorDB.updateVector({ indexName: testIndexName, id: idToBeUpdated, update });
 
         const results: QueryResult[] = await vectorDB.query({
           indexName: testIndexName,
@@ -316,7 +329,7 @@ describe('PgVector', () => {
           vector: newVector,
         };
 
-        await vectorDB.updateIndexById(testIndexName, idToBeUpdated, update);
+        await vectorDB.updateVector({ indexName: testIndexName, id: idToBeUpdated, update });
 
         const results: QueryResult[] = await vectorDB.query({
           indexName: testIndexName,
@@ -328,8 +341,10 @@ describe('PgVector', () => {
         expect(results[0]?.vector).toEqual(newVector);
       });
 
-      it('should throw exception when no updates are given', () => {
-        expect(vectorDB.updateIndexById(testIndexName, 'id', {})).rejects.toThrow('No updates provided');
+      it('should throw exception when no updates are given', async () => {
+        await expect(vectorDB.updateVector({ indexName: testIndexName, id: 'id', update: {} })).rejects.toThrow(
+          'No updates provided',
+        );
       });
     });
 
@@ -345,7 +360,7 @@ describe('PgVector', () => {
       });
 
       afterEach(async () => {
-        await vectorDB.deleteIndex(testIndexName);
+        await vectorDB.deleteIndex({ indexName: testIndexName });
       });
 
       it('should delete the vector by id', async () => {
@@ -353,7 +368,7 @@ describe('PgVector', () => {
         expect(ids).toHaveLength(3);
         const idToBeDeleted = ids[0];
 
-        await vectorDB.deleteIndexById(testIndexName, idToBeDeleted);
+        await vectorDB.deleteVector({ indexName: testIndexName, id: idToBeDeleted });
 
         const results: QueryResult[] = await vectorDB.query({
           indexName: testIndexName,
@@ -371,7 +386,7 @@ describe('PgVector', () => {
         const indexName = `test_query_2_${indexType}`;
         beforeAll(async () => {
           try {
-            await vectorDB.deleteIndex(indexName);
+            await vectorDB.deleteIndex({ indexName });
           } catch {
             // Ignore if doesn't exist
           }
@@ -379,7 +394,7 @@ describe('PgVector', () => {
         });
 
         beforeEach(async () => {
-          await vectorDB.truncateIndex(indexName);
+          await vectorDB.truncateIndex({ indexName });
           const vectors = [
             [1, 0, 0],
             [0.8, 0.2, 0],
@@ -394,7 +409,7 @@ describe('PgVector', () => {
         });
 
         afterAll(async () => {
-          await vectorDB.deleteIndex(indexName);
+          await vectorDB.deleteIndex({ indexName });
         });
 
         it('should return closest vectors', async () => {
@@ -416,12 +431,7 @@ describe('PgVector', () => {
         });
 
         it('should handle filters correctly', async () => {
-          const results = await vectorDB.query({
-            indexName,
-            queryVector: [1, 0, 0],
-            topK: 10,
-            filter: { type: 'a' },
-          });
+          const results = await vectorDB.query({ indexName, queryVector: [1, 0, 0], topK: 10, filter: { type: 'a' } });
 
           expect(results).toHaveLength(1);
           results.forEach(result => {
@@ -437,7 +447,7 @@ describe('PgVector', () => {
     const indexName = 'test_query_filters';
     beforeAll(async () => {
       try {
-        await vectorDB.deleteIndex(indexName);
+        await vectorDB.deleteIndex({ indexName });
       } catch {
         // Ignore if doesn't exist
       }
@@ -445,7 +455,7 @@ describe('PgVector', () => {
     });
 
     beforeEach(async () => {
-      await vectorDB.truncateIndex(indexName);
+      await vectorDB.truncateIndex({ indexName });
       const vectors = [
         [1, 0.1, 0],
         [0.9, 0.2, 0],
@@ -495,7 +505,7 @@ describe('PgVector', () => {
     });
 
     afterAll(async () => {
-      await vectorDB.deleteIndex(indexName);
+      await vectorDB.deleteIndex({ indexName });
     });
 
     // Numeric Comparison Tests
@@ -587,7 +597,7 @@ describe('PgVector', () => {
 
     // Array Operator Tests
     describe('Array Operators', () => {
-      it('should filter with $in operator', async () => {
+      it('should filter with $in operator for scalar field', async () => {
         const results = await vectorDB.query({
           indexName,
           queryVector: [1, 0, 0],
@@ -599,7 +609,25 @@ describe('PgVector', () => {
         });
       });
 
-      it('should filter with $nin operator', async () => {
+      it('should filter with $in operator for array field', async () => {
+        // Insert a record with tags as array
+        await vectorDB.upsert({
+          indexName,
+          vectors: [[2, 0.2, 0]],
+          metadata: [{ tags: ['featured', 'sale', 'new'] }],
+        });
+        const results = await vectorDB.query({
+          indexName,
+          queryVector: [1, 0, 0],
+          filter: { tags: { $in: ['sale', 'clearance'] } },
+        });
+        expect(results.length).toBeGreaterThan(0);
+        results.forEach(result => {
+          expect(result.metadata?.tags.some((tag: string) => ['sale', 'clearance'].includes(tag))).toBe(true);
+        });
+      });
+
+      it('should filter with $nin operator for scalar field', async () => {
         const results = await vectorDB.query({
           indexName,
           queryVector: [1, 0, 0],
@@ -608,6 +636,24 @@ describe('PgVector', () => {
         expect(results.length).toBeGreaterThan(0);
         results.forEach(result => {
           expect(['electronics', 'books']).not.toContain(result.metadata?.category);
+        });
+      });
+
+      it('should filter with $nin operator for array field', async () => {
+        // Insert a record with tags as array
+        await vectorDB.upsert({
+          indexName,
+          vectors: [[2, 0.3, 0]],
+          metadata: [{ tags: ['clearance', 'used'] }],
+        });
+        const results = await vectorDB.query({
+          indexName,
+          queryVector: [1, 0, 0],
+          filter: { tags: { $nin: ['new', 'sale'] } },
+        });
+        expect(results.length).toBeGreaterThan(0);
+        results.forEach(result => {
+          expect(result.metadata?.tags.every((tag: string) => !['new', 'sale'].includes(tag))).toBe(true);
         });
       });
 
@@ -638,6 +684,52 @@ describe('PgVector', () => {
         expect(results.length).toBeGreaterThan(0);
         results.forEach(result => {
           expect(result.metadata?.tags).toContain('new');
+        });
+      });
+
+      it('should filter with $contains operator for string substring', async () => {
+        const results = await vectorDB.query({
+          indexName,
+          queryVector: [1, 0, 0],
+          filter: { category: { $contains: 'lectro' } },
+        });
+        expect(results.length).toBeGreaterThan(0);
+        results.forEach(result => {
+          expect(result.metadata?.category).toContain('lectro');
+        });
+      });
+
+      it('should not match deep object containment with $contains', async () => {
+        // Insert a record with a nested object
+        await vectorDB.upsert({
+          indexName,
+          vectors: [[1, 0.1, 0]],
+          metadata: [{ details: { color: 'red', size: 'large' }, category: 'clothing' }],
+        });
+        // $contains does NOT support deep object containment in Postgres
+        const results = await vectorDB.query({
+          indexName,
+          queryVector: [1, 0.1, 0],
+          filter: { details: { $contains: { color: 'red' } } },
+        });
+        expect(results.length).toBe(0);
+      });
+
+      it('should fallback to direct equality for non-array, non-string', async () => {
+        // Insert a record with a numeric field
+        await vectorDB.upsert({
+          indexName,
+          vectors: [[1, 0.2, 0]],
+          metadata: [{ price: 123 }],
+        });
+        const results = await vectorDB.query({
+          indexName,
+          queryVector: [1, 0, 0],
+          filter: { price: { $contains: 123 } },
+        });
+        expect(results.length).toBeGreaterThan(0);
+        results.forEach(result => {
+          expect(result.metadata?.price).toBe(123);
         });
       });
 
@@ -791,29 +883,29 @@ describe('PgVector', () => {
         });
       });
 
-      it('should filter with $contains operator for nested objects', async () => {
-        // First insert a record with nested object
-        await vectorDB.upsert({
-          indexName,
-          vectors: [[1, 0.1, 0]],
-          metadata: [
-            {
-              details: { color: 'red', size: 'large' },
-              category: 'clothing',
-            },
-          ],
-        });
+      // it('should filter with $objectContains operator for nested objects', async () => {
+      //   // First insert a record with nested object
+      //   await vectorDB.upsert({
+      //     indexName,
+      //     vectors: [[1, 0.1, 0]],
+      //     metadata: [
+      //       {
+      //         details: { color: 'red', size: 'large' },
+      //         category: 'clothing',
+      //       },
+      //     ],
+      //   });
 
-        const results = await vectorDB.query({
-          indexName,
-          queryVector: [1, 0.1, 0],
-          filter: { details: { $contains: { color: 'red' } } },
-        });
-        expect(results.length).toBeGreaterThan(0);
-        results.forEach(result => {
-          expect(result.metadata?.details.color).toBe('red');
-        });
-      });
+      //   const results = await vectorDB.query({
+      //     indexName,
+      //     queryVector: [1, 0.1, 0],
+      //     filter: { details: { $objectContains: { color: 'red' } } },
+      //   });
+      //   expect(results.length).toBeGreaterThan(0);
+      //   results.forEach(result => {
+      //     expect(result.metadata?.details.color).toBe('red');
+      //   });
+      // });
 
       // String Pattern Tests
       it('should handle exact string matches', async () => {
@@ -1233,12 +1325,57 @@ describe('PgVector', () => {
           indexName,
           queryVector: [1, 0, 0],
           filter: { category: 'electronics' },
+          includeVector: false,
           minScore: 0.9,
         });
         expect(results.length).toBeGreaterThan(0);
         results.forEach(result => {
           expect(result.score).toBeGreaterThan(0.9);
         });
+      });
+    });
+
+    describe('Error Handling', () => {
+      const testIndexName = 'test_index_error';
+      beforeAll(async () => {
+        await vectorDB.createIndex({ indexName: testIndexName, dimension: 3 });
+      });
+
+      afterAll(async () => {
+        await vectorDB.deleteIndex({ indexName: testIndexName });
+      });
+
+      it('should handle non-existent index queries', async () => {
+        await expect(vectorDB.query({ indexName: 'non_existent_index_yu', queryVector: [1, 2, 3] })).rejects.toThrow();
+      });
+
+      it('should handle invalid dimension vectors', async () => {
+        const invalidVector = [1, 2, 3, 4]; // 4D vector for 3D index
+        await expect(vectorDB.upsert({ indexName: testIndexName, vectors: [invalidVector] })).rejects.toThrow();
+      });
+
+      it('should handle duplicate index creation gracefully', async () => {
+        const duplicateIndexName = `duplicate_test`;
+        const dimension = 768;
+
+        // Create index first time
+        await vectorDB.createIndex({
+          indexName: duplicateIndexName,
+          dimension,
+          metric: 'cosine',
+        });
+
+        // Try to create with same dimensions - should not throw
+        await expect(
+          vectorDB.createIndex({
+            indexName: duplicateIndexName,
+            dimension,
+            metric: 'cosine',
+          }),
+        ).resolves.not.toThrow();
+
+        // Cleanup
+        await vectorDB.deleteIndex({ indexName: duplicateIndexName });
       });
     });
 
@@ -1384,7 +1521,8 @@ describe('PgVector', () => {
           indexName,
           queryVector: [1, 0, 0],
           filter: { category: 'electronics' },
-          minScore: 0.9, // minScore
+          includeVector: false,
+          minScore: 0.9,
         });
         expect(results.length).toBeGreaterThan(0);
         results.forEach(result => {
@@ -1438,7 +1576,11 @@ describe('PgVector', () => {
         const results = await vectorDB.query({
           indexName,
           queryVector: [1, 0, 0],
-          filter: { $and: [{ category: 'electronics' }], $or: [{ price: { $lt: 100 } }, { price: { $gt: 20 } }] },
+          filter: {
+            $and: [{ category: 'electronics' }],
+            $or: [{ price: { $lt: 100 } }, { price: { $gt: 20 } }],
+            $nor: [],
+          },
         });
         expect(results.length).toBeGreaterThan(0);
         results.forEach(result => {
@@ -1458,13 +1600,7 @@ describe('PgVector', () => {
         const results = await vectorDB.query({
           indexName,
           queryVector: [1, 0, 0],
-          filter: {
-            tags: {
-              $elemMatch: {
-                $eq: 'value',
-              },
-            },
-          },
+          filter: { tags: { $elemMatch: { $eq: 'value' } } },
         });
         expect(results).toHaveLength(0); // Should return no results for non-array field
       });
@@ -1625,7 +1761,7 @@ describe('PgVector', () => {
       });
 
       afterAll(async () => {
-        await vectorDB.deleteIndex(indexName);
+        await vectorDB.deleteIndex({ indexName });
       });
 
       it('should use default ef value', async () => {
@@ -1670,7 +1806,7 @@ describe('PgVector', () => {
       });
 
       afterAll(async () => {
-        await vectorDB.deleteIndex(indexName);
+        await vectorDB.deleteIndex({ indexName });
       });
 
       it('should use default probe value', async () => {
@@ -1697,124 +1833,6 @@ describe('PgVector', () => {
       });
     });
   });
-  describe('Deprecation Warnings', () => {
-    const indexName = 'testdeprecationwarnings';
-
-    const indexName2 = 'testdeprecationwarnings2';
-
-    let warnSpy;
-
-    beforeAll(async () => {
-      await vectorDB.createIndex({ indexName: indexName, dimension: 3 });
-    });
-
-    afterAll(async () => {
-      await vectorDB.deleteIndex(indexName);
-      await vectorDB.deleteIndex(indexName2);
-    });
-
-    beforeEach(async () => {
-      warnSpy = vi.spyOn(vectorDB['logger'], 'warn');
-    });
-
-    afterEach(async () => {
-      warnSpy.mockRestore();
-      await vectorDB.deleteIndex(indexName2);
-    });
-
-    it('should show deprecation warning when using individual args for createIndex', async () => {
-      await vectorDB.createIndex(indexName2, 3, 'cosine');
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Deprecation Warning: Passing individual arguments to createIndex() is deprecated'),
-      );
-    });
-
-    it('should show deprecation warning when using individual args for upsert', async () => {
-      await vectorDB.upsert(indexName, [[1, 2, 3]], [{ test: 'data' }]);
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Deprecation Warning: Passing individual arguments to upsert() is deprecated'),
-      );
-    });
-
-    it('should show deprecation warning when using individual args for query', async () => {
-      await vectorDB.query(indexName, [1, 2, 3], 5);
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Deprecation Warning: Passing individual arguments to query() is deprecated'),
-      );
-    });
-
-    it('should show deprecation warning when using individual args for buildIndex', async () => {
-      await vectorDB.buildIndex(indexName, 'cosine', { type: 'flat' });
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Deprecation Warning: Passing individual arguments to buildIndex() is deprecated'),
-      );
-    });
-
-    it('should not show deprecation warning when using object param for buildIndex', async () => {
-      await vectorDB.buildIndex({
-        indexName: indexName,
-        metric: 'cosine',
-        indexConfig: { type: 'flat' },
-      });
-
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it('should not show deprecation warning when using object param for query', async () => {
-      await vectorDB.query({
-        indexName,
-        queryVector: [1, 2, 3],
-        topK: 5,
-      });
-
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it('should not show deprecation warning when using object param for createIndex', async () => {
-      await vectorDB.createIndex({
-        indexName: indexName2,
-        dimension: 3,
-        metric: 'cosine',
-      });
-
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it('should not show deprecation warning when using object param for upsert', async () => {
-      await vectorDB.upsert({
-        indexName,
-        vectors: [[1, 2, 3]],
-        metadata: [{ test: 'data' }],
-      });
-
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it('should maintain backward compatibility with individual args', async () => {
-      // Query
-      const queryResults = await vectorDB.query(indexName, [1, 2, 3], 5);
-      expect(Array.isArray(queryResults)).toBe(true);
-
-      // CreateIndex
-      await expect(vectorDB.createIndex(indexName2, 3, 'cosine')).resolves.not.toThrow();
-
-      // Upsert
-      const upsertResults = await vectorDB.upsert({
-        indexName,
-        vectors: [[1, 2, 3]],
-        metadata: [{ test: 'data' }],
-      });
-      expect(Array.isArray(upsertResults)).toBe(true);
-      expect(upsertResults).toHaveLength(1);
-
-      // BuildIndex
-      await expect(vectorDB.buildIndex(indexName, 'cosine', { type: 'flat' })).resolves.not.toThrow();
-    });
-  });
 
   describe('Concurrent Operations', () => {
     it('should handle concurrent index creation attempts', async () => {
@@ -1830,10 +1848,10 @@ describe('PgVector', () => {
       await expect(Promise.all(promises)).resolves.not.toThrow();
 
       // Verify only one index was actually created
-      const stats = await vectorDB.describeIndex(indexName);
+      const stats = await vectorDB.describeIndex({ indexName });
       expect(stats.dimension).toBe(dimension);
 
-      await vectorDB.deleteIndex(indexName);
+      await vectorDB.deleteIndex({ indexName });
     });
 
     it('should handle concurrent buildIndex attempts', async () => {
@@ -1852,10 +1870,548 @@ describe('PgVector', () => {
 
       await expect(Promise.all(promises)).resolves.not.toThrow();
 
-      const stats = await vectorDB.describeIndex(indexName);
+      const stats = await vectorDB.describeIndex({ indexName });
       expect(stats.type).toBe('ivfflat');
 
-      await vectorDB.deleteIndex(indexName);
+      await vectorDB.deleteIndex({ indexName });
+    });
+  });
+
+  describe('Schema Support', () => {
+    const customSchema = 'mastra_test';
+    let vectorDB: PgVector;
+    let customSchemaVectorDB: PgVector;
+
+    beforeAll(async () => {
+      // Initialize default vectorDB first
+      vectorDB = new PgVector({ connectionString });
+
+      // Create schema using the default vectorDB connection
+      const client = await vectorDB['pool'].connect();
+      try {
+        await client.query(`CREATE SCHEMA IF NOT EXISTS ${customSchema}`);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      // Now create the custom schema vectorDB instance
+      customSchemaVectorDB = new PgVector({
+        connectionString,
+        schemaName: customSchema,
+      });
+    });
+
+    afterAll(async () => {
+      // Clean up test tables and schema
+      try {
+        await customSchemaVectorDB.deleteIndex({ indexName: 'schema_test_vectors' });
+      } catch {
+        // Ignore errors if index doesn't exist
+      }
+
+      // Drop schema using the default vectorDB connection
+      const client = await vectorDB['pool'].connect();
+      try {
+        await client.query(`DROP SCHEMA IF EXISTS ${customSchema} CASCADE`);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      // Disconnect in reverse order
+      await customSchemaVectorDB.disconnect();
+      await vectorDB.disconnect();
+    });
+
+    describe('Constructor', () => {
+      it('should accept config object with connectionString', () => {
+        const db = new PgVector({ connectionString });
+        expect(db).toBeInstanceOf(PgVector);
+      });
+
+      it('should accept config object with schema', () => {
+        const db = new PgVector({ connectionString, schemaName: customSchema });
+        expect(db).toBeInstanceOf(PgVector);
+      });
+    });
+
+    describe('Schema Operations', () => {
+      const testIndexName = 'schema_test_vectors';
+
+      beforeEach(async () => {
+        // Clean up any existing indexes
+        try {
+          await customSchemaVectorDB.deleteIndex({ indexName: testIndexName });
+        } catch {
+          // Ignore if doesn't exist
+        }
+        try {
+          await vectorDB.deleteIndex({ indexName: testIndexName });
+        } catch {
+          // Ignore if doesn't exist
+        }
+      });
+
+      afterEach(async () => {
+        // Clean up indexes after each test
+        try {
+          await customSchemaVectorDB.deleteIndex({ indexName: testIndexName });
+        } catch {
+          // Ignore if doesn't exist
+        }
+        try {
+          await vectorDB.deleteIndex({ indexName: testIndexName });
+        } catch {
+          // Ignore if doesn't exist
+        }
+      });
+
+      it('should create and query index in custom schema', async () => {
+        // Create index in custom schema
+        await customSchemaVectorDB.createIndex({ indexName: testIndexName, dimension: 3 });
+
+        // Insert test vectors
+        const vectors = [
+          [1, 2, 3],
+          [4, 5, 6],
+        ];
+        const metadata = [{ test: 'custom_schema_1' }, { test: 'custom_schema_2' }];
+        await customSchemaVectorDB.upsert({ indexName: testIndexName, vectors, metadata });
+
+        // Query and verify results
+        const results = await customSchemaVectorDB.query({
+          indexName: testIndexName,
+          queryVector: [1, 2, 3],
+          topK: 2,
+        });
+        expect(results).toHaveLength(2);
+        expect(results[0]?.metadata?.test).toMatch(/custom_schema_/);
+
+        // Verify table exists in correct schema
+        const client = await customSchemaVectorDB['pool'].connect();
+        try {
+          const res = await client.query(
+            `
+            SELECT EXISTS (
+              SELECT FROM information_schema.tables 
+              WHERE table_schema = $1 
+              AND table_name = $2
+            )`,
+            [customSchema, testIndexName],
+          );
+          expect(res.rows[0].exists).toBe(true);
+        } finally {
+          client.release();
+        }
+      });
+
+      it('should describe index in custom schema', async () => {
+        // Create index in custom schema
+        await customSchemaVectorDB.createIndex({
+          indexName: testIndexName,
+          dimension: 3,
+          metric: 'dotproduct',
+          indexConfig: { type: 'hnsw' },
+        });
+        // Insert a vector
+        await customSchemaVectorDB.upsert({ indexName: testIndexName, vectors: [[1, 2, 3]] });
+        // Describe the index
+        const stats = await customSchemaVectorDB.describeIndex({ indexName: testIndexName });
+        expect(stats).toMatchObject({
+          dimension: 3,
+          metric: 'dotproduct',
+          type: 'hnsw',
+          count: 1,
+        });
+      });
+
+      it('should allow same index name in different schemas', async () => {
+        // Create same index name in both schemas
+        await vectorDB.createIndex({ indexName: testIndexName, dimension: 3 });
+        await customSchemaVectorDB.createIndex({ indexName: testIndexName, dimension: 3 });
+
+        // Insert different test data in each schema
+        await vectorDB.upsert({
+          indexName: testIndexName,
+          vectors: [[1, 2, 3]],
+          metadata: [{ test: 'default_schema' }],
+        });
+
+        await customSchemaVectorDB.upsert({
+          indexName: testIndexName,
+          vectors: [[1, 2, 3]],
+          metadata: [{ test: 'custom_schema' }],
+        });
+
+        // Query both schemas and verify different results
+        const defaultResults = await vectorDB.query({
+          indexName: testIndexName,
+          queryVector: [1, 2, 3],
+          topK: 1,
+        });
+        const customResults = await customSchemaVectorDB.query({
+          indexName: testIndexName,
+          queryVector: [1, 2, 3],
+          topK: 1,
+        });
+
+        expect(defaultResults[0]?.metadata?.test).toBe('default_schema');
+        expect(customResults[0]?.metadata?.test).toBe('custom_schema');
+      });
+
+      it('should maintain schema separation for all operations', async () => {
+        // Create index in custom schema
+        await customSchemaVectorDB.createIndex({ indexName: testIndexName, dimension: 3 });
+
+        // Test index operations
+        const stats = await customSchemaVectorDB.describeIndex({ indexName: testIndexName });
+        expect(stats.dimension).toBe(3);
+
+        // Test list operation
+        const indexes = await customSchemaVectorDB.listIndexes();
+        expect(indexes).toContain(testIndexName);
+
+        // Test update operation
+        const vectors = [[7, 8, 9]];
+        const metadata = [{ test: 'updated_in_custom_schema' }];
+        const [id] = await customSchemaVectorDB.upsert({
+          indexName: testIndexName,
+          vectors,
+          metadata,
+        });
+
+        // Test delete operation
+        await customSchemaVectorDB.deleteVector({ indexName: testIndexName, id: id! });
+
+        // Verify deletion
+        const results = await customSchemaVectorDB.query({
+          indexName: testIndexName,
+          queryVector: [7, 8, 9],
+          topK: 1,
+        });
+        expect(results).toHaveLength(0);
+      });
+    });
+  });
+
+  describe('Permission Handling', () => {
+    const schemaRestrictedUser = 'mastra_schema_restricted';
+    const vectorRestrictedUser = 'mastra_vector_restricted';
+    const restrictedPassword = 'test123';
+    const testSchema = 'test_schema';
+
+    const getConnectionString = (username: string) =>
+      connectionString.replace(/(postgresql:\/\/)[^:]+:[^@]+@/, `$1${username}:${restrictedPassword}@`);
+
+    beforeAll(async () => {
+      // First ensure the test schema doesn't exist from previous runs
+      const adminClient = await new pg.Pool({ connectionString }).connect();
+      try {
+        await adminClient.query('BEGIN');
+
+        // Drop the test schema if it exists from previous runs
+        await adminClient.query(`DROP SCHEMA IF EXISTS ${testSchema} CASCADE`);
+
+        // Create schema restricted user with minimal permissions
+        await adminClient.query(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${schemaRestrictedUser}') THEN
+              CREATE USER ${schemaRestrictedUser} WITH PASSWORD '${restrictedPassword}' NOCREATEDB;
+            END IF;
+          END
+          $$;
+        `);
+
+        // Grant only connect and usage to schema restricted user
+        await adminClient.query(`
+          REVOKE ALL ON DATABASE ${connectionString.split('/').pop()} FROM ${schemaRestrictedUser};
+          GRANT CONNECT ON DATABASE ${connectionString.split('/').pop()} TO ${schemaRestrictedUser};
+          REVOKE ALL ON SCHEMA public FROM ${schemaRestrictedUser};
+          GRANT USAGE ON SCHEMA public TO ${schemaRestrictedUser};
+        `);
+
+        // Create vector restricted user with table creation permissions
+        await adminClient.query(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${vectorRestrictedUser}') THEN
+              CREATE USER ${vectorRestrictedUser} WITH PASSWORD '${restrictedPassword}' NOCREATEDB;
+            END IF;
+          END
+          $$;
+        `);
+
+        // Grant connect, usage, and create to vector restricted user
+        await adminClient.query(`
+          REVOKE ALL ON DATABASE ${connectionString.split('/').pop()} FROM ${vectorRestrictedUser};
+          GRANT CONNECT ON DATABASE ${connectionString.split('/').pop()} TO ${vectorRestrictedUser};
+          REVOKE ALL ON SCHEMA public FROM ${vectorRestrictedUser};
+          GRANT USAGE, CREATE ON SCHEMA public TO ${vectorRestrictedUser};
+        `);
+
+        await adminClient.query('COMMIT');
+      } catch (e) {
+        await adminClient.query('ROLLBACK');
+        throw e;
+      } finally {
+        adminClient.release();
+      }
+    });
+
+    afterAll(async () => {
+      // Clean up test users and any objects they own
+      const adminClient = await new pg.Pool({ connectionString }).connect();
+      try {
+        await adminClient.query('BEGIN');
+
+        // Helper function to drop user and their objects
+        const dropUser = async username => {
+          // First revoke all possible privileges and reassign objects
+          await adminClient.query(
+            `
+            -- Handle object ownership (CASCADE is critical here)
+            REASSIGN OWNED BY ${username} TO postgres;
+            DROP OWNED BY ${username} CASCADE;
+
+            -- Finally drop the user
+            DROP ROLE ${username};
+            `,
+          );
+        };
+
+        // Drop both users
+        await dropUser(vectorRestrictedUser);
+        await dropUser(schemaRestrictedUser);
+
+        await adminClient.query('COMMIT');
+      } catch (e) {
+        await adminClient.query('ROLLBACK');
+        throw e;
+      } finally {
+        adminClient.release();
+      }
+    });
+
+    describe('Schema Creation', () => {
+      beforeEach(async () => {
+        // Ensure schema doesn't exist before each test
+        const adminClient = await new pg.Pool({ connectionString }).connect();
+        try {
+          await adminClient.query('BEGIN');
+          await adminClient.query(`DROP SCHEMA IF EXISTS ${testSchema} CASCADE`);
+          await adminClient.query('COMMIT');
+        } catch (e) {
+          await adminClient.query('ROLLBACK');
+          throw e;
+        } finally {
+          adminClient.release();
+        }
+      });
+
+      it('should fail when user lacks CREATE privilege', async () => {
+        const restrictedDB = new PgVector({
+          connectionString: getConnectionString(schemaRestrictedUser),
+          schemaName: testSchema,
+        });
+
+        // Test schema creation directly by accessing private method
+        await expect(async () => {
+          const client = await restrictedDB['pool'].connect();
+          try {
+            await restrictedDB['setupSchema'](client);
+          } finally {
+            client.release();
+          }
+        }).rejects.toThrow(`Unable to create schema "${testSchema}". This requires CREATE privilege on the database.`);
+
+        // Verify schema was not created
+        const adminClient = await new pg.Pool({ connectionString }).connect();
+        try {
+          const res = await adminClient.query(
+            `SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)`,
+            [testSchema],
+          );
+          expect(res.rows[0].exists).toBe(false);
+        } finally {
+          adminClient.release();
+        }
+
+        await restrictedDB.disconnect();
+      });
+
+      it('should fail with schema creation error when creating index', async () => {
+        const restrictedDB = new PgVector({
+          connectionString: getConnectionString(schemaRestrictedUser),
+          schemaName: testSchema,
+        });
+
+        // This should fail with the schema creation error
+        await expect(async () => {
+          await restrictedDB.createIndex({ indexName: 'test', dimension: 3 });
+        }).rejects.toThrow(`Unable to create schema "${testSchema}". This requires CREATE privilege on the database.`);
+
+        // Verify schema was not created
+        const adminClient = await new pg.Pool({ connectionString }).connect();
+        try {
+          const res = await adminClient.query(
+            `SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)`,
+            [testSchema],
+          );
+          expect(res.rows[0].exists).toBe(false);
+        } finally {
+          adminClient.release();
+        }
+
+        await restrictedDB.disconnect();
+      });
+    });
+
+    describe('Vector Extension', () => {
+      beforeEach(async () => {
+        // Create test table and grant necessary permissions
+        const adminClient = await new pg.Pool({ connectionString }).connect();
+        try {
+          await adminClient.query('BEGIN');
+
+          // First install vector extension
+          await adminClient.query('CREATE EXTENSION IF NOT EXISTS vector');
+
+          // Drop existing table if any
+          await adminClient.query('DROP TABLE IF EXISTS test CASCADE');
+
+          // Create test table as admin
+          await adminClient.query('CREATE TABLE IF NOT EXISTS test (id SERIAL PRIMARY KEY, embedding vector(3))');
+
+          // Grant ALL permissions including index creation
+          await adminClient.query(`
+            GRANT ALL ON TABLE test TO ${vectorRestrictedUser};
+            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${vectorRestrictedUser};
+            ALTER TABLE test OWNER TO ${vectorRestrictedUser};
+          `);
+
+          await adminClient.query('COMMIT');
+        } catch (e) {
+          await adminClient.query('ROLLBACK');
+          throw e;
+        } finally {
+          adminClient.release();
+        }
+      });
+
+      afterEach(async () => {
+        // Clean up test table
+        const adminClient = await new pg.Pool({ connectionString }).connect();
+        try {
+          await adminClient.query('BEGIN');
+          await adminClient.query('DROP TABLE IF EXISTS test CASCADE');
+          await adminClient.query('COMMIT');
+        } catch (e) {
+          await adminClient.query('ROLLBACK');
+          throw e;
+        } finally {
+          adminClient.release();
+        }
+      });
+
+      it('should handle lack of superuser privileges gracefully', async () => {
+        // First ensure vector extension is not installed
+        const adminClient = await new pg.Pool({ connectionString }).connect();
+        try {
+          await adminClient.query('DROP EXTENSION IF EXISTS vector CASCADE');
+        } finally {
+          adminClient.release();
+        }
+
+        const restrictedDB = new PgVector({
+          connectionString: getConnectionString(vectorRestrictedUser),
+        });
+
+        try {
+          const warnSpy = vi.spyOn(restrictedDB['logger'], 'warn');
+
+          // Try to create index which will trigger vector extension installation attempt
+          await expect(restrictedDB.createIndex({ indexName: 'test', dimension: 3 })).rejects.toThrow();
+
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.stringContaining('Could not install vector extension. This requires superuser privileges'),
+          );
+
+          warnSpy.mockRestore();
+        } finally {
+          // Ensure we wait for any pending operations before disconnecting
+          await new Promise(resolve => setTimeout(resolve, 100));
+          await restrictedDB.disconnect();
+        }
+      });
+
+      it('should continue if vector extension is already installed', async () => {
+        const restrictedDB = new PgVector({
+          connectionString: getConnectionString(vectorRestrictedUser),
+        });
+
+        try {
+          const debugSpy = vi.spyOn(restrictedDB['logger'], 'debug');
+
+          await restrictedDB.createIndex({ indexName: 'test', dimension: 3 });
+
+          expect(debugSpy).toHaveBeenCalledWith('Vector extension already installed, skipping installation');
+
+          debugSpy.mockRestore();
+        } finally {
+          // Ensure we wait for any pending operations before disconnecting
+          await new Promise(resolve => setTimeout(resolve, 100));
+          await restrictedDB.disconnect();
+        }
+      });
+    });
+  });
+
+  describe('PoolConfig Custom Options', () => {
+    it('should apply custom values to properties with default values', async () => {
+      const db = new PgVector({
+        connectionString,
+        pgPoolOptions: {
+          max: 5,
+          idleTimeoutMillis: 10000,
+          connectionTimeoutMillis: 1000,
+        },
+      });
+
+      expect(db['pool'].options.max).toBe(5);
+      expect(db['pool'].options.idleTimeoutMillis).toBe(10000);
+      expect(db['pool'].options.connectionTimeoutMillis).toBe(1000);
+    });
+
+    it('should pass properties with no default values', async () => {
+      const db = new PgVector({
+        connectionString,
+        pgPoolOptions: {
+          ssl: false,
+        },
+      });
+
+      expect(db['pool'].options.ssl).toBe(false);
+    });
+    it('should keep default values when custom values are added', async () => {
+      const db = new PgVector({
+        connectionString,
+        pgPoolOptions: {
+          ssl: false,
+        },
+      });
+
+      expect(db['pool'].options.max).toBe(20);
+      expect(db['pool'].options.idleTimeoutMillis).toBe(30000);
+      expect(db['pool'].options.connectionTimeoutMillis).toBe(2000);
+      expect(db['pool'].options.ssl).toBe(false);
     });
   });
 });

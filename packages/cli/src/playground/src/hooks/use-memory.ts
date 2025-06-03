@@ -1,4 +1,4 @@
-import type { AiMessageType, MessageType, StorageThreadType as ThreadType } from '@mastra/core/memory';
+import type { AiMessageType, MastraMessageV1, StorageThreadType as ThreadType } from '@mastra/core/memory';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
@@ -69,7 +69,7 @@ export const useThreads = ({
 };
 
 export const useMessages = ({ threadId, memory, agentId }: { threadId: string; memory: boolean; agentId: string }) => {
-  const { data, isLoading, mutate } = useSWR<{ uiMessages: Array<AiMessageType>; messages: Array<MessageType> }>(
+  const { data, isLoading, mutate } = useSWR<{ uiMessages: Array<AiMessageType>; messages: Array<MastraMessageV1> }>(
     `/api/memory/threads/${threadId}/messages?agentId=${agentId}`,
     url => fetcher(url, true),
     {
@@ -86,7 +86,7 @@ export const useMessages = ({ threadId, memory, agentId }: { threadId: string; m
     }
   }, [threadId, memory]);
 
-  return { messages: data?.uiMessages, isLoading, mutate };
+  return { messages: data?.messages, isLoading, mutate };
 };
 
 export const useDeleteThread = () => {
@@ -105,6 +105,7 @@ export const useDeleteThread = () => {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
+        'x-mastra-dev-playground': 'true',
       },
     });
 

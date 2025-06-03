@@ -23,7 +23,7 @@ export const ragAgent = new Agent({
   tools: { vectorQueryTool },
 });
 
-const pgVector = new PgVector(process.env.POSTGRES_CONNECTION_STRING);
+const pgVector = new PgVector({ connectionString: process.env.POSTGRES_CONNECTION_STRING });
 
 export const mastra = new Mastra({
   agents: { ragAgent },
@@ -31,6 +31,9 @@ export const mastra = new Mastra({
   deployer: getDeployer(),
   telemetry: {
     enabled: true,
+  },
+  server: {
+    port: 3000,
   },
 });
 

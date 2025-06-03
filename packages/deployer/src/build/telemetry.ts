@@ -1,10 +1,8 @@
 import * as babel from '@babel/core';
 import { rollup } from 'rollup';
 import esbuild from 'rollup-plugin-esbuild';
-
-import { removeAllExceptTelemetryConfig } from './babel/get-telemetry-config';
 import commonjs from '@rollup/plugin-commonjs';
-import { removeNonReferencedNodes } from './babel/remove-non-referenced-nodes';
+import { removeAllOptionsExceptTelemetry } from './babel/remove-all-options-telemetry';
 import { recursiveRemoveNonReferencedNodes } from './plugins/remove-unused-references';
 
 export function getTelemetryBundler(
@@ -46,7 +44,7 @@ export function getTelemetryBundler(
                 babelrc: false,
                 configFile: false,
                 filename: id,
-                plugins: [removeAllExceptTelemetryConfig(result)],
+                plugins: [removeAllOptionsExceptTelemetry(result)],
               },
               (err, result) => {
                 if (err) {
@@ -93,6 +91,7 @@ export async function writeTelemetryConfig(
   outputDir: string,
 ): Promise<{
   hasCustomConfig: boolean;
+  externalDependencies: string[];
 }> {
   const result = {
     hasCustomConfig: false,
@@ -100,11 +99,12 @@ export async function writeTelemetryConfig(
 
   const bundle = await getTelemetryBundler(entryFile, result);
 
-  await bundle.write({
+  const { output } = await bundle.write({
     dir: outputDir,
     format: 'es',
     entryFileNames: '[name].mjs',
   });
 
-  return result;
+  const externals = output[0].imports.filter(x => !x.startsWith('./'));
+  return { ...result, externalDependencies: externals };
 }

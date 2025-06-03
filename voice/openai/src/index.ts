@@ -151,6 +151,7 @@ export class OpenAIVoice extends MastraVoice {
       const response = await this.speechClient!.audio.speech.create({
         model: this.speechModel?.name ?? 'tts-1',
         voice: (options?.speaker ?? this.speaker) as OpenAIVoiceId,
+        response_format: options?.responseFormat ?? 'mp3',
         input,
         speed: options?.speed || 1.0,
       });
@@ -162,6 +163,18 @@ export class OpenAIVoice extends MastraVoice {
     }, 'voice.openai.speak')();
 
     return audio;
+  }
+
+  /**
+   * Checks if listening capabilities are enabled.
+   *
+   * @returns {Promise<{ enabled: boolean }>}
+   */
+  async getListener() {
+    if (!this.listeningClient) {
+      return { enabled: false };
+    }
+    return { enabled: true };
   }
 
   /**

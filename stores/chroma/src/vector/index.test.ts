@@ -2,7 +2,6 @@ import type { QueryResult, IndexStats } from '@mastra/core/vector';
 import { describe, expect, beforeEach, afterEach, it, beforeAll, afterAll, vi } from 'vitest';
 
 import { ChromaVector } from './';
-import { Collection } from 'chromadb';
 
 describe('ChromaVector Integration Tests', () => {
   let vectorDB = new ChromaVector({
@@ -17,7 +16,7 @@ describe('ChromaVector Integration Tests', () => {
   beforeEach(async () => {
     // Clean up any existing test index
     try {
-      await vectorDB.deleteIndex(testIndexName);
+      await vectorDB.deleteIndex({ indexName: testIndexName });
     } catch {
       // Ignore errors if index doesn't exist
     }
@@ -27,7 +26,7 @@ describe('ChromaVector Integration Tests', () => {
   afterEach(async () => {
     // Cleanup after tests
     try {
-      await vectorDB.deleteIndex(testIndexName);
+      await vectorDB.deleteIndex({ indexName: testIndexName });
     } catch {
       // Ignore cleanup errors
     }
@@ -40,14 +39,14 @@ describe('ChromaVector Integration Tests', () => {
     });
 
     it('should describe index correctly', async () => {
-      const stats: IndexStats = await vectorDB.describeIndex(testIndexName);
+      const stats: IndexStats = await vectorDB.describeIndex({ indexName: testIndexName });
       expect(stats.dimension).toBe(dimension);
       expect(stats.count).toBe(0);
       expect(stats.metric).toBe('cosine');
     });
 
     it('should delete index', async () => {
-      await vectorDB.deleteIndex(testIndexName);
+      await vectorDB.deleteIndex({ indexName: testIndexName });
       const indexes = await vectorDB.listIndexes();
       expect(indexes).not.toContain(testIndexName);
     });
@@ -59,10 +58,10 @@ describe('ChromaVector Integration Tests', () => {
         const testIndex = `test-index-${metric}`;
         await vectorDB.createIndex({ indexName: testIndex, dimension, metric });
 
-        const stats = await vectorDB.describeIndex(testIndex);
+        const stats = await vectorDB.describeIndex({ indexName: testIndex });
         expect(stats.metric).toBe(metric);
 
-        await vectorDB.deleteIndex(testIndex);
+        await vectorDB.deleteIndex({ indexName: testIndex });
       }
     });
   });
@@ -81,14 +80,14 @@ describe('ChromaVector Integration Tests', () => {
       expect(ids).toHaveLength(testVectors.length);
       ids.forEach(id => expect(typeof id).toBe('string'));
 
-      const stats = await vectorDB.describeIndex(testIndexName);
+      const stats = await vectorDB.describeIndex({ indexName: testIndexName });
       expect(stats.count).toBe(testVectors.length);
     });
 
     it('should upsert vectors with provided ids and metadata', async () => {
       await vectorDB.upsert({ indexName: testIndexName, vectors: testVectors, metadata: testMetadata, ids: testIds });
 
-      const stats = await vectorDB.describeIndex(testIndexName);
+      const stats = await vectorDB.describeIndex({ indexName: testIndexName });
       expect(stats.count).toBe(testVectors.length);
 
       // Query each vector to verify metadata
@@ -134,7 +133,7 @@ describe('ChromaVector Integration Tests', () => {
         metadata: newMetaData,
       };
 
-      await vectorDB.updateIndexById(testIndexName, idToBeUpdated, update);
+      await vectorDB.updateVector({ indexName: testIndexName, id: idToBeUpdated, update });
 
       const results: QueryResult[] = await vectorDB.query({
         indexName: testIndexName,
@@ -160,7 +159,7 @@ describe('ChromaVector Integration Tests', () => {
         metadata: newMetaData,
       };
 
-      await vectorDB.updateIndexById(testIndexName, idToBeUpdated, update);
+      await vectorDB.updateVector({ indexName: testIndexName, id: idToBeUpdated, update });
 
       const results: QueryResult[] = await vectorDB.query({
         indexName: testIndexName,
@@ -184,7 +183,7 @@ describe('ChromaVector Integration Tests', () => {
         vector: newVector,
       };
 
-      await vectorDB.updateIndexById(testIndexName, idToBeUpdated, update);
+      await vectorDB.updateVector({ indexName: testIndexName, id: idToBeUpdated, update });
 
       const results: QueryResult[] = await vectorDB.query({
         indexName: testIndexName,
@@ -196,8 +195,10 @@ describe('ChromaVector Integration Tests', () => {
       expect(results[0]?.vector).toEqual(newVector);
     });
 
-    it('should throw exception when no updates are given', () => {
-      expect(vectorDB.updateIndexById(testIndexName, 'id', {})).rejects.toThrow('No updates provided');
+    it('should throw exception when no updates are given', async () => {
+      await expect(vectorDB.updateVector({ indexName: testIndexName, id: 'id', update: {} })).rejects.toThrow(
+        'No updates provided',
+      );
     });
 
     it('should delete the vector by id', async () => {
@@ -205,7 +206,7 @@ describe('ChromaVector Integration Tests', () => {
       expect(ids).toHaveLength(3);
       const idToBeDeleted = ids[0];
 
-      await vectorDB.deleteIndexById(testIndexName, idToBeDeleted);
+      await vectorDB.deleteVector({ indexName: testIndexName, id: idToBeDeleted });
 
       const results: QueryResult[] = await vectorDB.query({
         indexName: testIndexName,
@@ -274,8 +275,17 @@ describe('ChromaVector Integration Tests', () => {
   });
 
   describe('Error Handling', () => {
+    const testIndexName = 'test_index_error';
+    beforeAll(async () => {
+      await vectorDB.createIndex({ indexName: testIndexName, dimension: 3 });
+    });
+
+    afterAll(async () => {
+      await vectorDB.deleteIndex({ indexName: testIndexName });
+    });
+
     it('should handle non-existent index queries', async () => {
-      await expect(vectorDB.query({ indexName: 'non-existent-index-yu', queryVector: [1, 2, 3] })).rejects.toThrow();
+      await expect(vectorDB.query({ indexName: 'non-existent-index', queryVector: [1, 2, 3] })).rejects.toThrow();
     });
 
     it('should handle invalid dimension vectors', async () => {
@@ -283,10 +293,59 @@ describe('ChromaVector Integration Tests', () => {
       await expect(vectorDB.upsert({ indexName: testIndexName, vectors: [invalidVector] })).rejects.toThrow();
     });
 
-    it('should handle mismatched metadata and vectors length', async () => {
-      const vectors = [[1, 2, 3]];
-      const metadata = [{}, {}]; // More metadata than vectors
-      await expect(vectorDB.upsert({ indexName: testIndexName, vectors, metadata })).rejects.toThrow();
+    it('should handle duplicate index creation gracefully', async () => {
+      const infoSpy = vi.spyOn(vectorDB['logger'], 'info');
+      const warnSpy = vi.spyOn(vectorDB['logger'], 'warn');
+
+      const duplicateIndexName = `duplicate-test`;
+      const dimension = 768;
+
+      try {
+        // Create index first time
+        await vectorDB.createIndex({
+          indexName: duplicateIndexName,
+          dimension,
+          metric: 'cosine',
+        });
+
+        // Try to create with same dimensions - should not throw
+        await expect(
+          vectorDB.createIndex({
+            indexName: duplicateIndexName,
+            dimension,
+            metric: 'cosine',
+          }),
+        ).resolves.not.toThrow();
+
+        expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('already exists with'));
+
+        // Try to create with same dimensions and different metric - should not throw
+        await expect(
+          vectorDB.createIndex({
+            indexName: duplicateIndexName,
+            dimension,
+            metric: 'euclidean',
+          }),
+        ).resolves.not.toThrow();
+
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Attempted to create index with metric'));
+
+        // Try to create with different dimensions - should throw
+        await expect(
+          vectorDB.createIndex({
+            indexName: duplicateIndexName,
+            dimension: dimension + 1,
+            metric: 'cosine',
+          }),
+        ).rejects.toThrow(
+          `Index "${duplicateIndexName}" already exists with ${dimension} dimensions, but ${dimension + 1} dimensions were requested`,
+        );
+      } finally {
+        infoSpy.mockRestore();
+        warnSpy.mockRestore();
+        // Cleanup
+        await vectorDB.deleteIndex({ indexName: duplicateIndexName });
+      }
     });
   });
 
@@ -462,7 +521,7 @@ describe('ChromaVector Integration Tests', () => {
     // Set up test vectors and metadata
     beforeAll(async () => {
       try {
-        await vectorDB.deleteIndex(testIndexName2);
+        await vectorDB.deleteIndex({ indexName: testIndexName2 });
       } catch {
         // Ignore errors if index doesn't exist
       }
@@ -510,7 +569,7 @@ describe('ChromaVector Integration Tests', () => {
     afterAll(async () => {
       // Cleanup after tests
       try {
-        await vectorDB.deleteIndex(testIndexName2);
+        await vectorDB.deleteIndex({ indexName: testIndexName2 });
       } catch {
         // Ignore cleanup errors
       }
@@ -759,22 +818,20 @@ describe('ChromaVector Integration Tests', () => {
         expect(results.length).toBeGreaterThan(0);
       });
 
-      it('requires multiple conditions in logical operators', async () => {
-        await expect(
-          vectorDB.query({
-            indexName: testIndexName2,
-            queryVector: [1, 0, 0],
-            filter: { $and: [{ category: 'electronics' }] },
-          }),
-        ).rejects.toThrow();
+      it('accepts single conditions in logical operators', async () => {
+        const results = await vectorDB.query({
+          indexName: testIndexName2,
+          queryVector: [1, 0, 0],
+          filter: { $and: [{ category: 'electronics' }] },
+        });
+        expect(results.length).toBeGreaterThan(0);
 
-        await expect(
-          vectorDB.query({
-            indexName: testIndexName2,
-            queryVector: [1, 0, 0],
-            filter: { $or: [{ price: { $gt: 900 } }] },
-          }),
-        ).rejects.toThrow();
+        const results2 = await vectorDB.query({
+          indexName: testIndexName2,
+          queryVector: [1, 0, 0],
+          filter: { $or: [{ price: { $gt: 900 } }] },
+        });
+        expect(results2.length).toBeGreaterThan(0);
       });
     });
 
@@ -1183,7 +1240,7 @@ describe('ChromaVector Integration Tests', () => {
 
     beforeAll(async () => {
       try {
-        await vectorDB.deleteIndex(testIndexName3);
+        await vectorDB.deleteIndex({ indexName: testIndexName3 });
       } catch {
         // Ignore errors if index doesn't exist
       }
@@ -1217,7 +1274,7 @@ describe('ChromaVector Integration Tests', () => {
     afterAll(async () => {
       // Cleanup after tests
       try {
-        await vectorDB.deleteIndex(testIndexName3);
+        await vectorDB.deleteIndex({ indexName: testIndexName3 });
       } catch {
         // Ignore cleanup errors
       }
@@ -1292,15 +1349,14 @@ describe('ChromaVector Integration Tests', () => {
     });
 
     describe('Edge Cases and Validation', () => {
-      it('should reject empty string in $contains', async () => {
-        await expect(
-          vectorDB.query({
-            indexName: testIndexName3,
-            queryVector: [1.0, 0.0, 0.0],
-            topK: 3,
-            documentFilter: { $contains: '' },
-          }),
-        ).rejects.toThrow('Expected where document operand value for operator $contains to be a non-empty str');
+      it('allows empty string in $contains', async () => {
+        const results = await vectorDB.query({
+          indexName: testIndexName3,
+          queryVector: [1.0, 0.0, 0.0],
+          topK: 3,
+          documentFilter: { $contains: '' },
+        });
+        expect(results).toHaveLength(3);
       });
 
       it('should be case sensitive', async () => {
@@ -1406,113 +1462,89 @@ describe('ChromaVector Integration Tests', () => {
       });
     });
   });
-  describe('Deprecation Warnings', () => {
-    const indexName = 'testdeprecationwarnings';
 
-    const indexName2 = 'testdeprecationwarnings2';
-
-    let warnSpy;
-
-    beforeAll(async () => {
-      await vectorDB.createIndex({ indexName: indexName, dimension: 3 });
-    });
-
-    afterAll(async () => {
-      try {
-        await vectorDB.deleteIndex(indexName);
-      } catch {
-        // Ignore errors if index doesn't exist
-      }
-      try {
-        await vectorDB.deleteIndex(indexName2);
-      } catch {
-        // Ignore errors if index doesn't exist
-      }
-    });
+  describe('Performance and Concurrency', () => {
+    const perfTestIndex = 'perf-test-index';
 
     beforeEach(async () => {
-      warnSpy = vi.spyOn(vectorDB['logger'], 'warn');
-    });
-
-    afterEach(async () => {
-      warnSpy.mockRestore();
       try {
-        await vectorDB.deleteIndex(indexName2);
+        await vectorDB.deleteIndex({ indexName: perfTestIndex });
       } catch {
         // Ignore errors if index doesn't exist
       }
-    });
+      await vectorDB.createIndex({ indexName: perfTestIndex, dimension });
+    }, 10000);
 
-    it('should show deprecation warning when using individual args for createIndex', async () => {
-      await vectorDB.createIndex(indexName2, 3, 'cosine');
+    afterEach(async () => {
+      try {
+        await vectorDB.deleteIndex({ indexName: perfTestIndex });
+      } catch {
+        // Ignore cleanup errors
+      }
+    }, 10000);
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Deprecation Warning: Passing individual arguments to createIndex() is deprecated'),
-      );
-    });
+    it('handles concurrent operations correctly', async () => {
+      const promises = Array(10)
+        .fill(0)
+        .map((_, i) =>
+          vectorDB.upsert({
+            indexName: perfTestIndex,
+            vectors: [[1, 0, 0]],
+            metadata: [{ test: 'concurrent', id: i }],
+            ids: [`concurrent-${i}`],
+          }),
+        );
+      await Promise.all(promises);
 
-    it('should show deprecation warning when using individual args for upsert', async () => {
-      await vectorDB.upsert(indexName, [[1, 2, 3]], [{ test: 'data' }]);
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Deprecation Warning: Passing individual arguments to upsert() is deprecated'),
-      );
-    });
-
-    it('should show deprecation warning when using individual args for query', async () => {
-      await vectorDB.query(indexName, [1, 2, 3], 5);
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Deprecation Warning: Passing individual arguments to query() is deprecated'),
-      );
-    });
-
-    it('should not show deprecation warning when using object param for query', async () => {
-      await vectorDB.query({
-        indexName,
-        queryVector: [1, 2, 3],
-        topK: 5,
+      const results = await vectorDB.query({
+        indexName: perfTestIndex,
+        queryVector: [1, 0, 0],
+        filter: { test: 'concurrent' },
       });
+      expect(results).toHaveLength(10);
+    }, 15000);
 
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
+    it('handles large batch operations', async () => {
+      const batchSize = 100; // Using 100 instead of 1000 to keep tests fast
+      const vectors = Array(batchSize)
+        .fill(0)
+        .map(() => [1, 0, 0]);
+      const metadata = vectors.map((_, i) => ({ index: i, test: 'batch' }));
+      const ids = vectors.map((_, i) => `batch-${i}`);
 
-    it('should not show deprecation warning when using object param for createIndex', async () => {
-      await vectorDB.createIndex({
-        indexName: indexName2,
-        dimension: 3,
-        metric: 'cosine',
-      });
-
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it('should not show deprecation warning when using object param for upsert', async () => {
       await vectorDB.upsert({
-        indexName,
-        vectors: [[1, 2, 3]],
-        metadata: [{ test: 'data' }],
+        indexName: perfTestIndex,
+        vectors,
+        metadata,
+        ids,
       });
 
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
+      // Verify all vectors were inserted
+      const stats = await vectorDB.describeIndex({ indexName: perfTestIndex });
+      expect(stats.count).toBe(batchSize);
 
-    it('should maintain backward compatibility with individual args', async () => {
-      // Query
-      const queryResults = await vectorDB.query(indexName, [1, 2, 3], 5);
-      expect(Array.isArray(queryResults)).toBe(true);
-
-      // CreateIndex
-      await expect(vectorDB.createIndex(indexName2, 3, 'cosine')).resolves.not.toThrow();
-
-      // Upsert
-      const upsertResults = await vectorDB.upsert({
-        indexName,
-        vectors: [[1, 2, 3]],
-        metadata: [{ test: 'data' }],
+      const results = await vectorDB.query({
+        indexName: perfTestIndex,
+        queryVector: [1, 0, 0],
+        filter: { test: 'batch' },
+        topK: batchSize,
       });
-      expect(Array.isArray(upsertResults)).toBe(true);
-      expect(upsertResults).toHaveLength(1);
-    });
+      expect(results).toHaveLength(batchSize);
+
+      // Test querying with pagination
+      const pageSize = 20;
+      const pages: QueryResult[][] = [];
+      for (let i = 0; i < batchSize; i += pageSize) {
+        const page = await vectorDB.query({
+          indexName: perfTestIndex,
+          queryVector: [1, 0, 0],
+          filter: { test: 'batch' },
+          topK: pageSize,
+        });
+        pages.push(page);
+        expect(page).toHaveLength(Math.min(pageSize, batchSize - i));
+      }
+      expect(pages).toHaveLength(Math.ceil(batchSize / pageSize));
+    }, 30000);
   });
 });

@@ -1,41 +1,54 @@
-import { useMatch, useNavigate } from 'react-router';
+import { Link } from 'react-router';
 
-import Breadcrumb from '@/components/ui/breadcrumbs';
-import { Button } from '@/components/ui/button';
-import { Header } from '@/components/ui/header';
+import { Crumb, Header, HeaderGroup, Button, Breadcrumb, HeaderAction, Icon, ApiIcon } from '@mastra/playground-ui';
 
-export function WorkflowHeader({ workflowName, workflowId }: { workflowName: string; workflowId: string }) {
-  const isGraphPage = useMatch(`/workflows/${workflowId}/graph`);
-  const isTracesPage = useMatch(`/workflows/${workflowId}/traces`);
-  const navigate = useNavigate();
-
-  const breadcrumbItems = [
-    {
-      label: 'Workflows',
-      href: '/workflows',
-    },
-    {
-      label: workflowName,
-      href: `/workflows/${workflowId}`,
-      isCurrent: true,
-    },
-  ];
+export function WorkflowHeader({
+  workflowName,
+  workflowId,
+  isLegacy,
+  runId,
+}: {
+  workflowName: string;
+  workflowId: string;
+  isLegacy?: boolean;
+  runId?: string;
+}) {
   return (
-    <Header title={<Breadcrumb items={breadcrumbItems} />}>
-      <Button
-        variant={isGraphPage ? 'secondary' : 'outline'}
-        size="slim"
-        onClick={() => navigate(`/workflows/${workflowId}/graph`)}
-      >
-        Graph
-      </Button>
-      <Button
-        variant={isTracesPage ? 'secondary' : 'outline'}
-        size="slim"
-        onClick={() => navigate(`/workflows/${workflowId}/traces`)}
-      >
-        Traces
-      </Button>
-    </Header>
+    <div className="shrink-0">
+      <Header>
+        <Breadcrumb>
+          <Crumb as={Link} to={`/workflows`}>
+            Workflows
+          </Crumb>
+          <Crumb as={Link} to={`/workflows${isLegacy ? '/legacy' : ''}/${workflowId}`} isCurrent={!runId}>
+            {workflowName}
+          </Crumb>
+
+          {runId && (
+            <Crumb as={Link} to={`/workflows/${workflowId}/graph/${runId}`} isCurrent>
+              {runId}
+            </Crumb>
+          )}
+        </Breadcrumb>
+
+        <HeaderGroup>
+          <Button as={Link} to={`/workflows${isLegacy ? '/legacy' : ''}/${workflowId}/graph`}>
+            Graph
+          </Button>
+          <Button as={Link} to={`/workflows${isLegacy ? '/legacy' : ''}/${workflowId}/traces`}>
+            Traces
+          </Button>
+        </HeaderGroup>
+
+        <HeaderAction>
+          <Button as={Link} to="/swagger-ui">
+            <Icon>
+              <ApiIcon />
+            </Icon>
+            API endpoints
+          </Button>
+        </HeaderAction>
+      </Header>
+    </div>
   );
 }

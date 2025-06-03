@@ -3,10 +3,21 @@
   "version": "0.0.1",
   "private": true,
   "devDependencies": {
-    "rollup": "^4.35.0",
-    "vitest": "^3.0.7"
+    "execa": "^9.5.2",
+    "get-port": "^7.1.0",
+    "globby": "^14.1.0",
+    "npm-cli-login": "^1.0.0",
+    "rollup": "^4.40.1",
+    "verdaccio": "^6.1.2",
+    "verdaccio-auth-memory": "^10.2.2",
+    "vitest": "^3.1.2"
   },
   "scripts": {
     "test": "vitest"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
