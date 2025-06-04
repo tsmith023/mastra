@@ -5,7 +5,10 @@ import type {
   CreateIndexParams,
   UpsertVectorParams,
   QueryVectorParams,
-  ParamsToArgs,
+  DescribeIndexParams,
+  DeleteIndexParams,
+  UpdateVectorParams,
+  DeleteVectorParams,
 } from '@mastra/core/vector';
 import type { VectorFilter } from '@mastra/core/vector/filter';
 import weaviate from 'weaviate-client';
@@ -41,11 +44,7 @@ export class WeaviateVector extends MastraVector {
   public static use = (opts?: WeaviateVectorOptions): Promise<WeaviateVector> =>
     weaviate.connectToCustom(opts || {}).then(client => new WeaviateVector(client));
 
-  public async upsert(...args: ParamsToArgs<UpsertVectorParams>): Promise<string[]> {
-    const params = this.normalizeArgs<UpsertVectorParams>('upsert', args);
-
-    const { indexName, vectors, metadata, ids } = params;
-
+  public async upsert({ indexName, vectors, metadata, ids }: UpsertVectorParams): Promise<string[]> {
     const objects = vectors.map((vector, i) => ({
       id: ids?.[i] || undefined,
       vectors: vector,
@@ -67,9 +66,7 @@ export class WeaviateVector extends MastraVector {
     return uuids;
   }
 
-  public createIndex(...args: ParamsToArgs<CreateIndexParams>): Promise<void> {
-    const params = this.normalizeArgs<CreateIndexParams>('createIndex', args);
-    const { indexName, metric = 'cosine' } = params;
+  public createIndex({ indexName, metric = 'cosine' }: CreateIndexParams): Promise<void> {
     return this.client.collections
       .create({
         name: indexName,
@@ -90,9 +87,7 @@ export class WeaviateVector extends MastraVector {
   transformFilter = (collection: Collection, filter?: VectorFilter) =>
     WeaviateFilterTranslator.use(collection).translate(filter);
 
-  query(...args: ParamsToArgs<QueryVectorParams>): Promise<QueryResult[]> {
-    const params = this.normalizeArgs<QueryVectorParams>('query', args);
-    const { indexName, queryVector, topK, filter, includeVector } = params;
+  query({ indexName, queryVector, topK, filter, includeVector }: QueryVectorParams): Promise<QueryResult[]> {
     const collection = this.client.collections.use(indexName);
     return collection.query
       .nearVector(queryVector, {
@@ -113,7 +108,7 @@ export class WeaviateVector extends MastraVector {
 
   listIndexes = (): Promise<string[]> => this.client.collections.listAll().then(cols => cols.map(col => col.name));
 
-  async describeIndex(indexName: string): Promise<IndexStats> {
+  async describeIndex({ indexName }: DescribeIndexParams): Promise<IndexStats> {
     const collection = this.client.collections.use(indexName);
     const [config, count, anObj] = await Promise.all([
       collection.config.get(),
@@ -129,16 +124,9 @@ export class WeaviateVector extends MastraVector {
     };
   }
 
-  deleteIndex = (indexName: string): Promise<void> => this.client.collections.delete(indexName);
+  deleteIndex = ({ indexName }: DeleteIndexParams): Promise<void> => this.client.collections.delete(indexName);
 
-  async updateIndexById(
-    indexName: string,
-    id: string,
-    update: {
-      vector?: number[];
-      metadata?: Record<string, any>;
-    },
-  ): Promise<void> {
+  async updateVector({ indexName, id, update }: UpdateVectorParams): Promise<void> {
     if (!update.vector && !update.metadata) {
       throw new Error('No updates provided');
     }
@@ -154,7 +142,7 @@ export class WeaviateVector extends MastraVector {
     }
   }
 
-  deleteIndexById = (indexName: string, id: string): Promise<void> =>
+  deleteVector = ({ indexName, id }: DeleteVectorParams): Promise<void> =>
     this.client.collections
       .use(indexName)
       .data.deleteById(id)

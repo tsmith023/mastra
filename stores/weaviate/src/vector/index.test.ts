@@ -19,7 +19,7 @@ describe('WeaviateVector', () => {
     });
 
     afterAll(async () => {
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     }, 50000);
 
     it('should list collections including ours', async () => {
@@ -28,7 +28,7 @@ describe('WeaviateVector', () => {
     }, 50000);
 
     it('should describe index with correct properties', async () => {
-      const stats = await weaviate.describeIndex(testCollectionName);
+      const stats = await weaviate.describeIndex({ indexName: testCollectionName });
       expect(stats.dimension).toBe(unsetDim);
       expect(stats.metric).toBe('cosine');
       expect(typeof stats.count).toBe('number');
@@ -47,11 +47,11 @@ describe('WeaviateVector', () => {
     });
 
     afterAll(async () => {
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     }, 50000);
 
     it('should return dimensions after inserting vectors', async () => {
-      const stats = await weaviate.describeIndex(testCollectionName);
+      const stats = await weaviate.describeIndex({ indexName: testCollectionName });
       expect(stats.dimension).toBe(dimension);
     }, 50000);
 
@@ -72,7 +72,7 @@ describe('WeaviateVector', () => {
     });
 
     afterAll(async () => {
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     }, 50000);
 
     const testVectors = [
@@ -140,7 +140,7 @@ describe('WeaviateVector', () => {
     });
 
     afterEach(async () => {
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     });
 
     it('should update the vector by id', async () => {
@@ -158,7 +158,7 @@ describe('WeaviateVector', () => {
         metadata: newMetaData,
       };
 
-      await weaviate.updateIndexById(testCollectionName, idToBeUpdated, update);
+      await weaviate.updateVector({ indexName: testCollectionName, id: idToBeUpdated, update });
 
       const results = await weaviate.query({
         indexName: testCollectionName,
@@ -185,7 +185,7 @@ describe('WeaviateVector', () => {
         metadata: newMetaData,
       };
 
-      await weaviate.updateIndexById(testCollectionName, idToBeUpdated, update);
+      await weaviate.updateVector({ indexName: testCollectionName, id: idToBeUpdated, update });
 
       const results = await weaviate.query({
         indexName: testCollectionName,
@@ -209,7 +209,7 @@ describe('WeaviateVector', () => {
         vector: newVector,
       };
 
-      await weaviate.updateIndexById(testCollectionName, idToBeUpdated, update);
+      await weaviate.updateVector({ indexName: testCollectionName, id: idToBeUpdated, update });
 
       const results = await weaviate.query({
         indexName: testCollectionName,
@@ -222,13 +222,19 @@ describe('WeaviateVector', () => {
     });
 
     it('should throw exception when no updates are given', () => {
-      expect(weaviate.updateIndexById(testCollectionName, 'id', {})).rejects.toThrow('No updates provided');
+      expect(weaviate.updateVector({ indexName: testCollectionName, id: 'id', update: {} })).rejects.toThrow(
+        'No updates provided',
+      );
     });
 
     it('should throw error for non-existent index', async () => {
       const nonExistentIndex = 'non-existent-index';
       await expect(
-        weaviate.updateIndexById(nonExistentIndex, generateUuid5('test-id'), { vector: [1, 2, 3] }),
+        weaviate.updateVector({
+          indexName: nonExistentIndex,
+          id: generateUuid5('test-id'),
+          update: { vector: [1, 2, 3] },
+        }),
       ).rejects.toThrow();
     });
 
@@ -240,7 +246,7 @@ describe('WeaviateVector', () => {
       });
 
       await expect(
-        weaviate.updateIndexById(testCollectionName, id, { vector: [1, 2] }), // Wrong dimension
+        weaviate.updateVector({ indexName: testCollectionName, id, update: { vector: [1, 2] } }), // Wrong dimension
       ).rejects.toThrow();
     });
   });
@@ -257,7 +263,7 @@ describe('WeaviateVector', () => {
     });
 
     afterEach(async () => {
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     });
 
     it('should delete the vector by id', async () => {
@@ -265,7 +271,7 @@ describe('WeaviateVector', () => {
       expect(ids).toHaveLength(3);
       const idToBeDeleted = ids[0];
 
-      await weaviate.deleteIndexById(testCollectionName, idToBeDeleted);
+      await weaviate.deleteVector({ indexName: testCollectionName, id: idToBeDeleted });
 
       const results = await weaviate.query({
         indexName: testCollectionName,
@@ -383,7 +389,7 @@ describe('WeaviateVector', () => {
     });
 
     afterAll(async () => {
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     }, 50000);
 
     describe('Basic Operators', () => {
@@ -542,7 +548,7 @@ describe('WeaviateVector', () => {
       await weaviate.createIndex({ indexName: testCollectionName, dimension });
       await weaviate.upsert({ indexName: testCollectionName, vectors: [[1, 0, 0]] });
       await expect(weaviate.upsert({ indexName: testCollectionName, vectors: [[1, 0]] })).rejects.toThrow();
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     }, 50000);
   });
 
@@ -592,7 +598,7 @@ describe('WeaviateVector', () => {
     });
 
     afterAll(async () => {
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     }, 50000);
 
     it('should handle undefined filter', async () => {
@@ -628,7 +634,7 @@ describe('WeaviateVector', () => {
     });
 
     afterAll(async () => {
-      await weaviate.deleteIndex(testCollectionName);
+      await weaviate.deleteIndex({ indexName: testCollectionName });
     }, 50000);
 
     it('should handle batch upsert of 1000 vectors', async () => {
